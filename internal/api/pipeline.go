@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DarmawanRobotics/netra-fleet-be/internal/detect"
+	"github.com/DarmawanRobotics/netra-fleet-be/internal/i18n"
 	"github.com/DarmawanRobotics/netra-fleet-be/internal/metrics"
 	"github.com/DarmawanRobotics/netra-fleet-be/internal/store"
 )
@@ -102,7 +103,8 @@ func (s *Server) notifyConfirmed(id int64) {
 }
 
 func (s *Server) caption(a store.Anomaly, rule store.Rule) string {
-	where := "posisi tidak diketahui"
+	lang := s.cfg.Lang
+	where := i18n.T(lang, "unknown_position")
 	if a.X != nil && a.Y != nil {
 		where = fmt.Sprintf("x %.1f m, y %.1f m", *a.X, *a.Y)
 	}
@@ -110,14 +112,14 @@ func (s *Server) caption(a store.Anomaly, rule store.Rule) string {
 	if note == "" {
 		note = a.EarlyNote
 	}
-	text := fmt.Sprintf("<b>%s</b> terdeteksi oleh %s\n%s\n%s",
-		html.EscapeString(rule.Label), html.EscapeString(a.RobotID),
+	text := fmt.Sprintf(i18n.T(lang, "detected_by")+"\n%s\n%s",
+		html.EscapeString(i18n.Category(lang, rule.Category, rule.Label)), html.EscapeString(a.RobotID),
 		a.DetectedAt.In(s.cfg.TimeZone).Format("02 Jan 2006 15:04"), where)
 	if note != "" {
 		text += "\n" + html.EscapeString(note)
 	}
 	if s.cfg.PublicURL != "" {
-		text += fmt.Sprintf("\n%s/anomali/%d", s.cfg.PublicURL, a.ID)
+		text += fmt.Sprintf("\n%s/anomalies/%d", s.cfg.PublicURL, a.ID)
 	}
 	return text
 }

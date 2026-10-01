@@ -8,21 +8,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DarmawanRobotics/netra-fleet-be/internal/i18n"
 	"github.com/DarmawanRobotics/netra-fleet-be/internal/report"
 	"github.com/DarmawanRobotics/netra-fleet-be/internal/store"
 )
-
-var statusLabel = map[string]string{
-	"queued": "Antri", "analyzing": "Dianalisis", "needs_validation": "Perlu validasi", "confirmed": "Terkonfirmasi",
-	"rejected": "Ditolak", "dismissed": "Diabaikan", "requested": "Dikirim", "running": "Berjalan",
-	"finished": "Selesai", "stopped": "Dihentikan", "failed": "Gagal",
-}
 
 func (s *Server) local(t *time.Time) string {
 	if t == nil {
 		return "-"
 	}
 	return t.In(s.cfg.TimeZone).Format("02 Jan 2006 15:04")
+}
+
+func pdfLabels(lang string) report.Labels {
+	return report.Labels{Generated: i18n.T(lang, "generated"), Page: i18n.T(lang, "page"), NoData: i18n.T(lang, "no_data")}
 }
 
 func duration(from, to *time.Time) string {
@@ -34,17 +33,19 @@ func duration(from, to *time.Time) string {
 		end = *to
 	}
 	d := end.Sub(*from).Round(time.Minute)
-	return fmt.Sprintf("%dj %02dm", int(d.Hours()), int(d.Minutes())%60)
+	return fmt.Sprintf("%dh %02dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
-func (s *Server) ruleLabels(r *http.Request) map[string]string {
-	labels := map[string]string{}
-	if rules, err := s.store.ListRules(r.Context()); err == nil {
-		for _, rule := range rules {
-			labels[rule.Category] = rule.Label
+// labeler returns the request language and a function translating anomaly category codes.
+func (s *Server) labeler(r *http.Request) (string, func(string) string) {
+	lang := i18n.Lang(r.URL.Query().Get("lang"))
+	rules := map[string]string{}
+	if list, err := s.store.ListRules(r.Context()); err == nil {
+		for _, rule := range list {
+			rules[rule.Category] = rule.Label
 		}
 	}
-	return labels
+	return lang, func(code string) string { return i18n.Category(lang, code, rules[code]) }
 }
 
 func category(a store.Anomaly) string {
@@ -79,7 +80,8 @@ func (s *Server) patrolReportPDF(w http.ResponseWriter, r *http.Request) {
 	recap, _ := s.store.PatrolRecap(r.Context(), id)
 	anomalies, _ := s.store.ListAnomalies(r.Context(), "", "", "", id, time.Unix(0, 0), time.Now().Add(time.Hour))
 	events, _ := s.store.ListEvents(r.Context(), "", id)
-	labels := s.ruleLabels(r)
+	lang, label := s.labeler(r)
+	t := func(key string) string { return i18n.T(lang, key) }
 	routeName := "-"
 	if p.RouteID != nil {
 		if route, _, err := s.store.GetRoute(r.Context(), *p.RouteID); err == nil {
@@ -88,10 +90,10 @@ func (s *Server) patrolReportPDF(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, images := [][]string{}, []report.Image{}
 	for _, a := range anomalies {
-		label := labels[category(a)]
-		rows = append(rows, []string{s.local(&a.DetectedAt), label, statusLabel[a.Status], position(a)})
+		cat := label(category(a))
+		rows = append(rows, []string{s.local(&a.DetectedAt), cat, t(a.Status), position(a)})
 		if a.Status != "rejected" && a.Status != "dismissed" && len(images) < 12 {
-			images = append(images, report.Image{Path: a.ImagePath, Caption: label + " · " + a.DetectedAt.In(s.cfg.TimeZone).Format("15:04")})
+			images = append(images, report.Image{Path: a.ImagePath, Caption: cat + " · " + a.DetectedAt.In(s.cfg.TimeZone).Format("15:04")})
 		}
 	}
 	timeline := [][]string{}
@@ -101,20 +103,21 @@ func (s *Server) patrolReportPDF(w http.ResponseWriter, r *http.Request) {
 	}
 	stops, _ := recap["events"].(map[string]int)
 	doc := report.Document{
-		Title:     fmt.Sprintf("Laporan Patroli #%d", p.ID),
+		Title:     fmt.Sprintf(t("patrol_report"), p.ID),
 		Subtitle:  fmt.Sprintf("%s · %s · %s", p.RobotID, routeName, s.local(p.StartedAt)),
 		Generated: time.Now().In(s.cfg.TimeZone),
+		Labels:    pdfLabels(lang),
 		Sections: []report.Section{
-			{Title: "Ringkasan", Facts: [][2]string{
-				{"Status", statusLabel[p.Status]}, {"Robot", p.RobotID},
-				{"Mulai", s.local(p.StartedAt)}, {"Selesai", s.local(p.FinishedAt)},
-				{"Durasi", duration(p.StartedAt, p.FinishedAt)}, {"Putaran", fmt.Sprint(p.Laps)},
-				{"Titik diinspeksi", fmt.Sprint(stops["inspected"])}, {"Titik dilewati", fmt.Sprint(stops["skipped"])},
-				{"Anomali", fmt.Sprint(len(rows))}, {"Puncak keramaian", fmt.Sprint(recap["crowd_peak"])},
+			{Title: t("summary"), Facts: [][2]string{
+				{t("status"), t(p.Status)}, {t("robot"), p.RobotID},
+				{t("started"), s.local(p.StartedAt)}, {t("finished"), s.local(p.FinishedAt)},
+				{t("duration"), duration(p.StartedAt, p.FinishedAt)}, {t("laps"), fmt.Sprint(p.Laps)},
+				{t("stops_inspected"), fmt.Sprint(stops["inspected"])}, {t("stops_skipped"), fmt.Sprint(stops["skipped"])},
+				{t("anomalies"), fmt.Sprint(len(rows))}, {t("crowd_peak"), fmt.Sprint(recap["crowd_peak"])},
 			}},
-			{Title: "Anomali", Table: &report.Table{Header: []string{"Waktu", "Kategori", "Status", "Posisi"},
+			{Title: t("anomalies"), Table: &report.Table{Header: []string{t("time"), t("category"), t("status"), t("position")},
 				Widths: []float64{38, 42, 35, 65}, Rows: rows}, Images: images},
-			{Title: "Linimasa", Table: &report.Table{Header: []string{"Jam", "Kejadian", "Detail"},
+			{Title: t("timeline"), Table: &report.Table{Header: []string{t("time"), t("event"), t("detail")},
 				Widths: []float64{22, 28, 130}, Rows: timeline}},
 		},
 	}
@@ -123,7 +126,7 @@ func (s *Server) patrolReportPDF(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	send(w, fmt.Sprintf("patroli-%d.pdf", p.ID), "application/pdf", buf.Bytes())
+	send(w, fmt.Sprintf("patrol-%d.pdf", p.ID), "application/pdf", buf.Bytes())
 }
 
 func compact(s string, n int) string {
@@ -144,12 +147,13 @@ func (s *Server) summaryReport(w http.ResponseWriter, r *http.Request) {
 	}
 	anomalies, _ := s.store.ListAnomalies(r.Context(), "", "", robotID, 0, from, to)
 	timeline, _ := s.store.CrowdTimeline(r.Context(), robotID, "day", s.cfg.TimeZone.String(), from, to)
-	labels := s.ruleLabels(r)
+	lang, label := s.labeler(r)
+	t := func(key string) string { return i18n.T(lang, key) }
 
 	byCategory := map[string]int{}
 	for _, a := range anomalies {
 		if a.Status != "rejected" && a.Status != "dismissed" {
-			byCategory[labels[category(a)]]++
+			byCategory[label(category(a))]++
 		}
 	}
 	categories := make([]string, 0, len(byCategory))
@@ -168,7 +172,7 @@ func (s *Server) summaryReport(w http.ResponseWriter, r *http.Request) {
 			finished++
 		}
 		patrolRows = append(patrolRows, []string{fmt.Sprint(p.ID), p.RobotID, s.local(p.StartedAt),
-			duration(p.StartedAt, p.FinishedAt), fmt.Sprint(p.Laps), statusLabel[p.Status]})
+			duration(p.StartedAt, p.FinishedAt), fmt.Sprint(p.Laps), t(p.Status)})
 	}
 	crowdRows := [][]string{}
 	for _, t := range timeline {
@@ -176,29 +180,36 @@ func (s *Server) summaryReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Query().Get("format") == "xlsx" {
+		patrolHeader := []string{t("id"), t("robot"), t("started"), t("duration"), t("laps"), t("status")}
 		sheets := []report.Sheet{
-			{Name: "Patroli", Header: []string{"ID", "Robot", "Mulai", "Durasi", "Putaran", "Status"}, Rows: anyRows(patrolRows)},
-			{Name: "Anomali per kategori", Header: []string{"Kategori", "Jumlah"}, Rows: anyRows(catRows)},
-			{Name: "Keramaian harian", Header: []string{"Hari", "Puncak orang"}, Rows: anyRows(crowdRows)},
+			{Name: t("patrols"), Header: patrolHeader, Rows: anyRows(patrolRows)},
+			{Name: t("anomalies_by_category"), Header: []string{t("category"), t("count")}, Rows: anyRows(catRows)},
+			{Name: t("daily_crowd"), Header: []string{t("day"), t("peak_people")}, Rows: anyRows(crowdRows)},
 		}
 		var buf bytes.Buffer
 		if err := report.WriteXLSX(&buf, sheets); err != nil {
 			fail(w, err)
 			return
 		}
-		send(w, "ringkasan-netra.xlsx", xlsxType, buf.Bytes())
+		send(w, "netra-summary.xlsx", xlsxType, buf.Bytes())
 		return
 	}
 	period := fmt.Sprintf("%s – %s", from.In(s.cfg.TimeZone).Format("02 Jan 2006"), to.In(s.cfg.TimeZone).Format("02 Jan 2006"))
+	robotLabel := robotID
+	if robotID == "" {
+		robotLabel = t("all")
+	}
 	doc := report.Document{
-		Title: "Laporan Ringkasan Operasi", Subtitle: period, Generated: time.Now().In(s.cfg.TimeZone),
+		Title: t("summary_report"), Subtitle: period, Generated: time.Now().In(s.cfg.TimeZone), Labels: pdfLabels(lang),
 		Sections: []report.Section{
-			{Title: "Ringkasan", Facts: [][2]string{{"Patroli", fmt.Sprint(len(patrols))}, {"Selesai", fmt.Sprint(finished)},
-				{"Anomali", fmt.Sprint(len(anomalies))}, {"Robot", map[bool]string{true: "Semua", false: robotID}[robotID == ""]}}},
-			{Title: "Anomali per kategori", Table: &report.Table{Header: []string{"Kategori", "Jumlah"}, Widths: []float64{120, 60}, Rows: catRows}},
-			{Title: "Keramaian harian (puncak)", Table: &report.Table{Header: []string{"Hari", "Puncak orang"}, Widths: []float64{120, 60}, Rows: crowdRows}},
-			{Title: "Daftar patroli", Table: &report.Table{Header: []string{"ID", "Robot", "Mulai", "Durasi", "Putaran", "Status"},
-				Widths: []float64{15, 30, 45, 30, 20, 40}, Rows: patrolRows}},
+			{Title: t("summary"), Facts: [][2]string{{t("patrols"), fmt.Sprint(len(patrols))}, {t("finished"), fmt.Sprint(finished)},
+				{t("anomalies"), fmt.Sprint(len(anomalies))}, {t("robot"), robotLabel}}},
+			{Title: t("anomalies_by_category"), Table: &report.Table{Header: []string{t("category"), t("count")},
+				Widths: []float64{120, 60}, Rows: catRows}},
+			{Title: t("daily_crowd"), Table: &report.Table{Header: []string{t("day"), t("peak_people")},
+				Widths: []float64{120, 60}, Rows: crowdRows}},
+			{Title: t("patrols"), Table: &report.Table{Header: []string{t("id"), t("robot"), t("started"), t("duration"), t("laps"),
+				t("status")}, Widths: []float64{15, 30, 45, 30, 20, 40}, Rows: patrolRows}},
 		},
 	}
 	var buf bytes.Buffer
@@ -206,7 +217,7 @@ func (s *Server) summaryReport(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	send(w, "ringkasan-netra.pdf", "application/pdf", buf.Bytes())
+	send(w, "netra-summary.pdf", "application/pdf", buf.Bytes())
 }
 
 func anyRows(rows [][]string) [][]any {
@@ -228,23 +239,25 @@ func (s *Server) anomaliesExport(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	labels := s.ruleLabels(r)
+	lang, label := s.labeler(r)
+	t := func(key string) string { return i18n.T(lang, key) }
 	rows := [][]any{}
 	for _, a := range anomalies {
 		final := any(nil)
 		if a.FinalConfidence != nil {
 			final = *a.FinalConfidence
 		}
-		rows = append(rows, []any{a.ID, a.DetectedAt.In(s.cfg.TimeZone), a.RobotID, labels[a.EarlyCategory], a.EarlyConfidence,
-			labels[category(a)], final, statusLabel[a.Status], position(a), a.FinalNote + a.EarlyNote, deref(a.ValidatedBy)})
+		rows = append(rows, []any{a.ID, a.DetectedAt.In(s.cfg.TimeZone), a.RobotID, label(a.EarlyCategory), a.EarlyConfidence,
+			label(category(a)), final, t(a.Status), position(a), a.FinalNote + a.EarlyNote, deref(a.ValidatedBy)})
 	}
 	var buf bytes.Buffer
-	if err := report.WriteXLSX(&buf, []report.Sheet{{Name: "Anomali", Header: []string{"ID", "Waktu", "Robot", "Deteksi awal",
-		"Yakin awal", "Deteksi final", "Yakin final", "Status", "Posisi", "Keterangan", "Divalidasi oleh"}, Rows: rows}}); err != nil {
+	header := []string{t("id"), t("time"), t("robot"), t("early_detection"), t("early_confidence"), t("final_detection"),
+		t("final_confidence"), t("status"), t("position"), t("note"), t("validated_by")}
+	if err := report.WriteXLSX(&buf, []report.Sheet{{Name: t("anomalies"), Header: header, Rows: rows}}); err != nil {
 		fail(w, err)
 		return
 	}
-	send(w, "anomali.xlsx", xlsxType, buf.Bytes())
+	send(w, "anomalies.xlsx", xlsxType, buf.Bytes())
 }
 
 func (s *Server) patrolsExport(w http.ResponseWriter, r *http.Request) {
@@ -254,18 +267,20 @@ func (s *Server) patrolsExport(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	lang := i18n.Lang(r.URL.Query().Get("lang"))
+	t := func(key string) string { return i18n.T(lang, key) }
 	rows := [][]any{}
 	for _, p := range patrols {
 		rows = append(rows, []any{p.ID, p.RobotID, s.local(p.StartedAt), s.local(p.FinishedAt), duration(p.StartedAt, p.FinishedAt),
-			p.Laps, statusLabel[p.Status], p.Message})
+			p.Laps, t(p.Status), p.Message})
 	}
+	header := []string{t("id"), t("robot"), t("started"), t("finished"), t("duration"), t("laps"), t("status"), t("note")}
 	var buf bytes.Buffer
-	if err := report.WriteXLSX(&buf, []report.Sheet{{Name: "Patroli", Header: []string{"ID", "Robot", "Mulai", "Selesai",
-		"Durasi", "Putaran", "Status", "Catatan"}, Rows: rows}}); err != nil {
+	if err := report.WriteXLSX(&buf, []report.Sheet{{Name: t("patrols"), Header: header, Rows: rows}}); err != nil {
 		fail(w, err)
 		return
 	}
-	send(w, "patroli.xlsx", xlsxType, buf.Bytes())
+	send(w, "patrols.xlsx", xlsxType, buf.Bytes())
 }
 
 func deref(s *string) string {

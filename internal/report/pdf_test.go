@@ -23,12 +23,12 @@ func TestWritePDF(t *testing.T) {
 	_ = os.WriteFile(broken, []byte("\xff\xd8not a jpeg"), 0o644)
 	rows := make([][]string, 80)
 	for i := range rows {
-		rows[i] = []string{"2026-10-02 09:00", "Sampah", "Terkonfirmasi", "x 5.0 m, y 0.1 m — très long text to clip"}
+		rows[i] = []string{"2026-10-02 09:00", "Trash", "Confirmed", "x 5.0 m, y 0.1 m — a very long text that must be clipped"}
 	}
-	doc := Document{Title: "Laporan Patroli #12", Subtitle: "l1w-01 · Koridor Lt1", Generated: time.Now(),
-		Sections: []Section{{Title: "Ringkasan", Facts: [][2]string{{"Durasi", "42 mnt"}, {"Putaran", "3"}, {"Anomali", "2"}}},
-			{Title: "Anomali", Table: &Table{Header: []string{"Waktu", "Kategori", "Status", "Posisi"}, Widths: []float64{35, 35, 35, 75}, Rows: rows},
-				Images: []Image{{Path: path, Caption: "Sampah · 09:00"}, {Path: path, Caption: "Tumpahan"}, {Path: "/missing.jpg"}, {Path: broken}, {Path: path, Caption: "4"}}}}}
+	doc := Document{Title: "Patrol report #12", Subtitle: "l1w-01 · Corridor L1", Generated: time.Now(),
+		Sections: []Section{{Title: "Summary", Facts: [][2]string{{"Duration", "42 min"}, {"Laps", "3"}, {"Anomalies", "2"}}},
+			{Title: "Anomalies", Table: &Table{Header: []string{"Time", "Category", "Status", "Position"}, Widths: []float64{35, 35, 35, 75}, Rows: rows},
+				Images: []Image{{Path: path, Caption: "Trash · 09:00"}, {Path: path, Caption: "Spill"}, {Path: "/missing.jpg"}, {Path: broken}, {Path: path, Caption: "4"}}}}}
 	var buf bytes.Buffer
 	if err := WritePDF(&buf, doc); err != nil {
 		t.Fatal(err)

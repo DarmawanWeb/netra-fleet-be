@@ -23,6 +23,7 @@ type Config struct {
 	SessionTTL       time.Duration
 	AllowedOrigin    string
 	NatsURL          string
+	Lang             string // notification language: en | id
 }
 
 // Load reads the configuration, falling back to development defaults.
@@ -47,6 +48,7 @@ func Load() Config {
 		SessionTTL:       time.Duration(ttlHours) * time.Hour,
 		AllowedOrigin:    env("NETRA_ALLOWED_ORIGIN", "*"),
 		NatsURL:          env("NETRA_NATS_URL", ""),
+		Lang:             env("NETRA_LANG", "en"),
 	}
 }
 

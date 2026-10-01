@@ -39,6 +39,12 @@ type Document struct {
 	Subtitle  string
 	Sections  []Section
 	Generated time.Time
+	Labels    Labels
+}
+
+// Labels are the fixed texts of the page frame.
+type Labels struct {
+	Generated, Page, NoData string
 }
 
 const pageWidth = 180.0
@@ -66,8 +72,8 @@ func WritePDF(w io.Writer, d Document) error {
 		pdf.SetY(-12)
 		pdf.SetFont("Helvetica", "", 7)
 		pdf.SetTextColor(120, 120, 120)
-		pdf.CellFormat(90, 5, tr("Dibuat "+d.Generated.Format("02 Jan 2006 15:04")), "", 0, "L", false, 0, "")
-		pdf.CellFormat(90, 5, fmt.Sprintf("Halaman %d/{nb}", pdf.PageNo()), "", 0, "R", false, 0, "")
+		pdf.CellFormat(90, 5, tr(or(d.Labels.Generated, "Generated")+" "+d.Generated.Format("02 Jan 2006 15:04")), "", 0, "L", false, 0, "")
+		pdf.CellFormat(90, 5, fmt.Sprintf("%s %d/{nb}", or(d.Labels.Page, "Page"), pdf.PageNo()), "", 0, "R", false, 0, "")
 	})
 	pdf.AliasNbPages("")
 	pdf.AddPage()
@@ -81,7 +87,7 @@ func WritePDF(w io.Writer, d Document) error {
 	}
 	pdf.Ln(3)
 	for _, s := range d.Sections {
-		writeSection(pdf, tr, s)
+		writeSection(pdf, tr, s, or(d.Labels.NoData, "No data"))
 	}
 	if err := pdf.Error(); err != nil {
 		return err
@@ -89,7 +95,7 @@ func WritePDF(w io.Writer, d Document) error {
 	return pdf.Output(w)
 }
 
-func writeSection(pdf *fpdf.Fpdf, tr func(string) string, s Section) {
+func writeSection(pdf *fpdf.Fpdf, tr func(string) string, s Section, noData string) {
 	if pdf.GetY() > 250 {
 		pdf.AddPage()
 	}
@@ -112,7 +118,7 @@ func writeSection(pdf *fpdf.Fpdf, tr func(string) string, s Section) {
 	}
 	if s.Table != nil {
 		pdf.Ln(1)
-		writeTable(pdf, tr, *s.Table)
+		writeTable(pdf, tr, *s.Table, noData)
 	}
 	if len(s.Images) > 0 {
 		pdf.Ln(2)
@@ -121,7 +127,7 @@ func writeSection(pdf *fpdf.Fpdf, tr func(string) string, s Section) {
 	pdf.Ln(2)
 }
 
-func writeTable(pdf *fpdf.Fpdf, tr func(string) string, t Table) {
+func writeTable(pdf *fpdf.Fpdf, tr func(string) string, t Table, noData string) {
 	widths := t.Widths
 	if len(widths) != len(t.Header) {
 		widths = make([]float64, len(t.Header))
@@ -142,7 +148,7 @@ func writeTable(pdf *fpdf.Fpdf, tr func(string) string, t Table) {
 	}
 	header()
 	if len(t.Rows) == 0 {
-		pdf.CellFormat(pageWidth, 6, tr("Tidak ada data"), "", 1, "L", false, 0, "")
+		pdf.CellFormat(pageWidth, 6, tr(noData), "", 1, "L", false, 0, "")
 		return
 	}
 	for r, row := range t.Rows {
@@ -209,4 +215,11 @@ func decodable(path string) bool {
 	defer f.Close()
 	_, _, err = image.DecodeConfig(f)
 	return err == nil
+}
+
+func or(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }

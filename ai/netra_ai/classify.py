@@ -15,14 +15,18 @@ PROMPT = (
     '"{early}" ({confidence:.0%} sure). Look carefully at the floor and the people. '
     'Decide which single category is really present: {options}. Use "none" when the robot was wrong. '
     'Answer only JSON: {{"category": "<one of {options}>", "confidence": <0..1>, '
-    '"description": "<one sentence in Indonesian describing what and where>"}}.'
+    '"description": "<one sentence in {language} describing what and where>"}}.'
 )
 
 
-def build_prompt(categories: list[str], early: str, early_confidence: float) -> str:
+def build_prompt(
+    categories: list[str], early: str, early_confidence: float, language: str = "English"
+) -> str:
     """Return the review prompt."""
     options = ", ".join([*categories, "none"])
-    return PROMPT.format(early=early.replace("_", " "), confidence=early_confidence, options=options)
+    return PROMPT.format(
+        early=early.replace("_", " "), confidence=early_confidence, options=options, language=language
+    )
 
 
 def keyword_category(text: str, categories: list[str]) -> str:

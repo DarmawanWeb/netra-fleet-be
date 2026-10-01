@@ -12,6 +12,7 @@ answers are constrained to JSON and off-list wording is mapped to the configured
 | `NETRA_AI_CATEGORIES` | `trash,spill,floor_damage,fallen_person` | must match the NETRA rule codes |
 | `NETRA_AI_CONCURRENCY` | `1` | simultaneous model calls |
 | `NETRA_AI_MAX_SIDE` | `1024` | image downscale |
+| `NETRA_AI_LANGUAGE` | `English` | language of the description |
 
 `GET /healthz` reports whether the model is present, `GET /metrics` exposes request counts and
 latency for Prometheus.

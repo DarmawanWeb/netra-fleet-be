@@ -26,6 +26,7 @@ CATEGORIES = [
 MAX_SIDE = int(os.environ.get("NETRA_AI_MAX_SIDE", "1024"))
 TIMEOUT = float(os.environ.get("NETRA_AI_TIMEOUT", "90"))
 KEEP_ALIVE = os.environ.get("NETRA_AI_KEEP_ALIVE", "1h")
+LANGUAGE = os.environ.get("NETRA_AI_LANGUAGE", "English")
 
 REQUESTS = Counter("netra_ai_requests_total", "Detections served.", ["category", "result"])
 LATENCY = Histogram("netra_ai_latency_seconds", "Model latency.", buckets=(0.5, 1, 2, 4, 8, 16, 32, 64))
@@ -76,7 +77,7 @@ async def detect(image: Annotated[UploadFile, File()], early: Annotated[str, For
         raise HTTPException(status_code=400, detail=f"unreadable image: {error}") from error
     body = {
         "model": MODEL,
-        "prompt": build_prompt(CATEGORIES, early_category, early_confidence),
+        "prompt": build_prompt(CATEGORIES, early_category, early_confidence, LANGUAGE),
         "images": [encoded],
         "format": "json",
         "stream": False,

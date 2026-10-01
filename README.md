@@ -49,7 +49,8 @@ Robot side: `Pashupati/src/robot_fleet/API.md`. Dashboard side (Bearer session t
 | GET | `/api/v1/audit` | audit |
 | GET | `/api/v1/ws` | view |
 
-Time ranges use `from`/`to` (RFC 3339, default last 7 days).
+Time ranges use `from`/`to` (RFC 3339, default last 7 days). Reports take `lang=en|id` (default
+`en`); Telegram captions use `NETRA_LANG`.
 
 ## Develop
 

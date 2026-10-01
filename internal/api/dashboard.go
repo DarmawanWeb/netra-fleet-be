@@ -225,7 +225,7 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request) {
 		c.ID = 0
 	}
 	if c.Name == "" {
-		c.Name = "Patroli " + c.TimeOfDay
+		c.Name = "Patrol " + c.TimeOfDay
 	}
 	id, err := s.store.SaveSchedule(r.Context(), c)
 	if err != nil {
