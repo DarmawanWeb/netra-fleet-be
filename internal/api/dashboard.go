@@ -209,8 +209,18 @@ func (s *Server) listSchedules(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request) {
 	var c store.Schedule
-	if decode(r, &c) != nil || c.RobotID == "" || c.RouteID == 0 || !timePattern.MatchString(c.TimeOfDay) || len(c.Days) == 0 {
-		writeError(w, http.StatusBadRequest, "robot_id, route_id, days (0-6) and time_of_day (HH:MM) required")
+	if decode(r, &c) != nil || c.RobotID == "" || c.RouteID == 0 || !timePattern.MatchString(c.TimeOfDay) {
+		writeError(w, http.StatusBadRequest, "robot_id, route_id and time_of_day (HH:MM) required")
+		return
+	}
+	if c.OnceOn != nil {
+		if _, err := time.Parse("2006-01-02", *c.OnceOn); err != nil {
+			writeError(w, http.StatusBadRequest, "once_on must be YYYY-MM-DD")
+			return
+		}
+		c.Days = []int64{}
+	} else if len(c.Days) == 0 {
+		writeError(w, http.StatusBadRequest, "days (0-6) or once_on required")
 		return
 	}
 	for _, d := range c.Days {
