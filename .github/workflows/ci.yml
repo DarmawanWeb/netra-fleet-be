@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: netra
+          POSTGRES_PASSWORD: netra
+          POSTGRES_DB: netra
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U netra" --health-interval 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61
+      - run: go test -race ./...
+      - name: end-to-end smoke test
+        env:
+          NETRA_ADMIN_PASSWORD: admin
+          NETRA_DATABASE_URL: postgres://netra:netra@localhost:5432/netra?sslmode=disable
+          NETRA_DATA_DIR: /tmp/netra-data
+        run: |
+          go build -o netra-api ./cmd/netra-api
+          ./netra-api & sleep 3
+          pip install requests websocket-client
+          NETRA_PASSWORD=admin python3 scripts/smoke_test.py
+
+  ai:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: ruff check . && ruff format --check .
+      - run: python -m pytest -q
+
+  images:
+    if: github.event_name == 'push'
+    needs: [api, ai]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: netra-api
+            context: .
+          - name: netra-ai
+            context: ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,format=short
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

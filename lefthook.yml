@@ -1,0 +1,25 @@
+pre-commit:
+  parallel: true
+  commands:
+    gofmt:
+      glob: "*.go"
+      run: test -z "$(gofmt -l {staged_files})" || (gofmt -l {staged_files}; exit 1)
+    vet:
+      glob: "*.go"
+      run: go vet ./...
+    golangci:
+      glob: "*.go"
+      run: golangci-lint run --new-from-rev=HEAD
+    ruff:
+      root: "ai/"
+      glob: "*.py"
+      run: ruff check {staged_files} && ruff format --check {staged_files}
+commit-msg:
+  commands:
+    conventional:
+      run: |
+        grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?: .+' {1} || { echo "use conventional commits, e.g. feat(api): add x"; exit 1; }
+pre-push:
+  commands:
+    test:
+      run: go test ./...
