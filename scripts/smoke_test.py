@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end check of a running netra-api with a simulated robot (pip install requests websocket-client)."""
 import base64
+from datetime import datetime
 import json
 import os
 import sys
@@ -112,6 +113,21 @@ time.sleep(0.3)
 check(r.status_code == 202 and any(m.get('name') == 'estop' for m in inbox if m.get('type') == 'command'),
       'robot got estop')
 check('public_url' in s.get(f'{API}/api/v1/info').json(), 'info endpoint')
+
+# a robot clock two hours behind (no NTP on the robot network): timestamps land on server time
+skewed = time.time() - 7200
+ws.send(json.dumps({'type': 'telemetry', 'ts': skewed, 'pose': {'x': 1, 'y': 2, 'yaw': 0},
+                    'nav': {'state': 'NAV_INACTIVE'}}))
+time.sleep(0.3)
+am = {'uid': str(uuid.uuid4()), 'ts': skewed - 5, 'category': 'trash', 'confidence': 0.9, 'description': 'skew',
+      'pose': {'x': 5.0, 'y': 0.1, 'yaw': 0.0}}
+skew_id = requests.post(f'{API}/api/v1/robot/anomalies', headers=rh, data={'meta': json.dumps(am)},
+                        files={'image.jpg': ('image.jpg', jpeg, 'image/jpeg')}).json()['id']
+detected = s.get(f'{API}/api/v1/anomalies/{skew_id}').json()['detected_at']
+age = time.time() - datetime.fromisoformat(detected.replace('Z', '+00:00')).timestamp()
+check(0 < age < 60, f'skewed robot clock corrected (anomaly {age:.0f} s old)')
+skew = {x['id']: x for x in s.get(f'{API}/api/v1/robots').json()}[robot_id]['clock_skew_s']
+check(skew is not None and abs(skew - 7200) < 30, f'clock skew reported ({skew} s)')
 
 # RBAC
 viewer = f'viewer{uuid.uuid4().hex[:5]}'

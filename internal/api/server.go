@@ -44,7 +44,8 @@ type Server struct {
 
 	mu      sync.Mutex
 	pending map[string]pendingCommand
-	lastLog map[string]time.Time // last telemetry history sample per robot
+	lastLog map[string]time.Time     // last telemetry history sample per robot
+	skew    map[string]time.Duration // robot clock offset (server - robot), see clock.go
 }
 
 type pendingCommand struct {
@@ -57,6 +58,7 @@ func New(cfg config.Config, st *store.Store, h *hub.Hub, tg *notify.Telegram, de
 	return &Server{
 		cfg: cfg, store: st, hub: h, telegram: tg, detector: det, bus: b, limiter: newLoginLimiter(),
 		lastLog:  map[string]time.Time{},
+		skew:     map[string]time.Duration{},
 		upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
 		wake:     make(chan struct{}, 1),
 		pending:  map[string]pendingCommand{},

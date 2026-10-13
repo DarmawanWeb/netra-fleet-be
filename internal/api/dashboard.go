@@ -43,6 +43,9 @@ func (s *Server) dashboardWS(w http.ResponseWriter, r *http.Request) {
 type robotView struct {
 	store.Robot
 	Online bool `json:"online"`
+	// ClockSkewS is how many seconds the robot clock is behind the server (negative: ahead),
+	// measured from its telemetry; null until the robot has sent telemetry since the server started.
+	ClockSkewS *float64 `json:"clock_skew_s"`
 }
 
 func (s *Server) listRobots(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +56,7 @@ func (s *Server) listRobots(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]robotView, len(robots))
 	for i, rb := range robots {
-		out[i] = robotView{rb, s.hub.Online(rb.ID)}
+		out[i] = robotView{Robot: rb, Online: s.hub.Online(rb.ID), ClockSkewS: s.clockSkew(rb.ID)}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -27,6 +27,7 @@ type robotMessage struct {
 	Lap      int             `json:"lap"`
 	Reason   string          `json:"reason"`
 	PatrolID *float64        `json:"patrol_id"`
+	TS       float64         `json:"ts"`
 	TSStart  float64         `json:"ts_start"`
 	TSEnd    float64         `json:"ts_end"`
 	CellSize float64         `json:"cell_size"`
@@ -83,6 +84,7 @@ func (s *Server) handleRobotMessage(ctx context.Context, robotID string, data []
 	patrolID := patrolRef(m.PatrolID)
 	switch m.Type {
 	case "telemetry":
+		s.noteClock(robotID, m.TS, time.Now())
 		if err := s.store.SaveTelemetry(ctx, robotID, data); err != nil {
 			slog.Error("save telemetry", "err", err)
 		}
@@ -102,8 +104,8 @@ func (s *Server) handleRobotMessage(ctx context.Context, robotID string, data []
 	case "stop_event", "alert":
 		_ = s.store.InsertEvent(ctx, robotID, patrolID, m.Type, data)
 	case "crowd":
-		if err := s.store.InsertCrowd(ctx, robotID, patrolID, unixTime(m.TSStart), unixTime(m.TSEnd),
-			m.CellSize, m.Cells, m.Peak); err != nil {
+		start, end := s.robotTime(robotID, m.TSStart), s.robotTime(robotID, m.TSEnd)
+		if err := s.store.InsertCrowd(ctx, robotID, patrolID, start, end, m.CellSize, m.Cells, m.Peak); err != nil {
 			slog.Error("save crowd", "err", err)
 		}
 	case "ack":
@@ -265,7 +267,7 @@ func (s *Server) robotAnomaly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a := store.Anomaly{UID: meta.UID, RobotID: robotID, PatrolID: patrolRef(meta.PatrolID),
-		RouteID: patrolRef(meta.RouteID), DetectedAt: unixTime(meta.TS), EarlyCategory: meta.Category,
+		RouteID: patrolRef(meta.RouteID), DetectedAt: s.robotTime(robotID, meta.TS), EarlyCategory: meta.Category,
 		EarlyConfidence: meta.Confidence, EarlyNote: meta.Description, StopIndex: meta.StopIndex, ImagePath: path}
 	if a.EarlyCategory == "" {
 		a.EarlyCategory = "unknown"
@@ -302,7 +304,7 @@ func (s *Server) robotRoute(w http.ResponseWriter, r *http.Request) {
 		name = "route " + time.Now().Format("2006-01-02 15:04")
 	}
 	id, err := s.store.InsertRoute(r.Context(), store.Route{UID: meta.UID, RobotID: robotID, Name: name,
-		RecordedAt: unixTime(meta.RecordedAt), LengthM: meta.LengthM, Stops: meta.Stops, Closed: meta.Closed},
+		RecordedAt: s.robotTime(robotID, meta.RecordedAt), LengthM: meta.LengthM, Stops: meta.Stops, Closed: meta.Closed},
 		string(csv))
 	if err != nil {
 		fail(w, err)

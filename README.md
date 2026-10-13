@@ -12,6 +12,9 @@ Backend of **NETRA Fleet**, the patrol command center for Pashupati robots.
 - **Robots** — token per robot, live state over WebSocket, commands (pause, resume, localize,
   stop patrol, e-stop and e-stop release), telemetry history (5 s samples) for track playback and
   battery charts.
+- **Robot clock correction** — a robot without NTP (its own Wi-Fi at a demo, no internet) keeps a
+  wrong clock; the offset is measured from every telemetry message and anomaly, crowd and route
+  timestamps are moved onto server time when it is above 2 s (`clock_skew_s` in `GET /robots`).
 - **Patrols** — start now, weekly or one-off schedules, status from the robot, laps, events, recap.
 - **Anomalies** — robot early detection → queue → `netra-ai` final detection → per-category rule
   (auto-confirm + Telegram, or operator validation).
