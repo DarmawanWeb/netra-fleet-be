@@ -58,6 +58,11 @@ func (s *Server) listRobots(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// info tells the dashboard how robots reach this command center (Settings, robot registration).
+func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"public_url": s.cfg.PublicURL, "time_zone": s.cfg.TimeZone.String()})
+}
+
 func (s *Server) createRobot(w http.ResponseWriter, r *http.Request) {
 	var body struct{ ID, Name string }
 	if decode(r, &body) != nil || !robotIDPattern.MatchString(body.ID) {

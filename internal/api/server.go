@@ -72,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	route := func(p auth.Permission, pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.requireUser(p, h)) }
 	view, operate, configure := auth.PermView, auth.PermOperate, auth.PermConfigure
 	route(view, "GET /api/v1/me", s.me)
+	route(view, "GET /api/v1/info", s.info)
 	route(view, "POST /api/v1/auth/logout", s.logout)
 	route(view, "POST /api/v1/me/password", s.changeOwnPassword)
 	route(view, "GET /api/v1/ws", s.dashboardWS)

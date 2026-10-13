@@ -35,6 +35,7 @@ Robot side: `Pashupati/src/robot_fleet/API.md`. Dashboard side (Bearer session t
 |---|---|---|
 | POST | `/api/v1/auth/login`, `/api/v1/auth/logout` | — / any |
 | GET, POST | `/api/v1/me`, `/api/v1/me/password` | any |
+| GET | `/api/v1/info` (`public_url` robots connect to, `time_zone`) | view |
 | GET | `/api/v1/robots`, `/api/v1/robots/{id}/track` | view |
 | POST, PUT, DELETE | `/api/v1/robots[/{id}]`, `/api/v1/robots/{id}/token` | configure |
 | POST | `/api/v1/robots/{id}/command` (`pause`, `resume`, `localize`, `stop_patrol`, `estop`, `estop_release`) | operate |

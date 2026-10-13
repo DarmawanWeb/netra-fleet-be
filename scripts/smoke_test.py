@@ -111,6 +111,7 @@ r = s.post(f'{API}/api/v1/robots/{robot_id}/command', json={'name': 'estop'})
 time.sleep(0.3)
 check(r.status_code == 202 and any(m.get('name') == 'estop' for m in inbox if m.get('type') == 'command'),
       'robot got estop')
+check('public_url' in s.get(f'{API}/api/v1/info').json(), 'info endpoint')
 
 # RBAC
 viewer = f'viewer{uuid.uuid4().hex[:5]}'
