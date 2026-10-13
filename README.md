@@ -9,8 +9,9 @@ Backend of **NETRA Fleet**, the patrol command center for Pashupati robots.
 
 ## Features
 
-- **Robots** — token per robot, live state over WebSocket, commands, telemetry history (5 s samples)
-  for track playback and battery charts.
+- **Robots** — token per robot, live state over WebSocket, commands (pause, resume, localize,
+  stop patrol, e-stop and e-stop release), telemetry history (5 s samples) for track playback and
+  battery charts.
 - **Patrols** — start now, weekly or one-off schedules, status from the robot, laps, events, recap.
 - **Anomalies** — robot early detection → queue → `netra-ai` final detection → per-category rule
   (auto-confirm + Telegram, or operator validation).
@@ -36,7 +37,7 @@ Robot side: `Pashupati/src/robot_fleet/API.md`. Dashboard side (Bearer session t
 | GET, POST | `/api/v1/me`, `/api/v1/me/password` | any |
 | GET | `/api/v1/robots`, `/api/v1/robots/{id}/track` | view |
 | POST, PUT, DELETE | `/api/v1/robots[/{id}]`, `/api/v1/robots/{id}/token` | configure |
-| POST | `/api/v1/robots/{id}/command` | operate |
+| POST | `/api/v1/robots/{id}/command` (`pause`, `resume`, `localize`, `stop_patrol`, `estop`, `estop_release`) | operate |
 | GET / PUT | `/api/v1/routes[/{id}][/file]` | view / configure |
 | GET / POST, PUT, DELETE | `/api/v1/schedules[/{id}]` (`days` or `once_on`) | view / operate |
 | GET / POST | `/api/v1/patrols[/{id}]`, `/api/v1/patrols/{id}/stop` | view / operate |

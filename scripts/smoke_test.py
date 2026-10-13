@@ -106,6 +106,12 @@ for path in ('summary?format=xlsx', 'anomalies', 'patrols'):
     check(x.status_code == 200 and x.content[:2] == b'PK', f'{path} XLSX')
 check(isinstance(s.get(f'{API}/api/v1/robots/{robot_id}/track').json(), list), 'track history')
 
+# e-stop from the dashboard reaches the robot
+r = s.post(f'{API}/api/v1/robots/{robot_id}/command', json={'name': 'estop'})
+time.sleep(0.3)
+check(r.status_code == 202 and any(m.get('name') == 'estop' for m in inbox if m.get('type') == 'command'),
+      'robot got estop')
+
 # RBAC
 viewer = f'viewer{uuid.uuid4().hex[:5]}'
 check(s.post(f'{API}/api/v1/users', json={'username': viewer, 'role': 'viewer', 'password': 'viewer-pass'}).status_code == 201,

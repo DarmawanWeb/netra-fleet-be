@@ -108,14 +108,19 @@ func (s *Server) rotateRobotToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"id": r.PathValue("id"), "token": token})
 }
 
+// robotCommands are the commands an operator may send directly; start_patrol goes through
+// POST /patrols. estop latches the robot's software e-stop until estop_release.
+var robotCommands = map[string]bool{
+	"pause": true, "resume": true, "localize": true, "stop_patrol": true, "estop": true, "estop_release": true,
+}
+
 func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string         `json:"name"`
 		Args map[string]any `json:"args"`
 	}
-	allowed := map[string]bool{"pause": true, "resume": true, "localize": true, "stop_patrol": true}
-	if decode(r, &body) != nil || !allowed[body.Name] {
-		writeError(w, http.StatusBadRequest, "name must be pause, resume, localize or stop_patrol")
+	if decode(r, &body) != nil || !robotCommands[body.Name] {
+		writeError(w, http.StatusBadRequest, "name must be pause, resume, localize, stop_patrol, estop or estop_release")
 		return
 	}
 	id, err := s.sendCommand(r.PathValue("id"), body.Name, body.Args, 0)
