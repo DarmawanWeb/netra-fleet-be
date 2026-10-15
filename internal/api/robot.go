@@ -140,12 +140,16 @@ func (s *Server) logTelemetry(ctx context.Context, robotID string, data []byte, 
 		Battery *struct {
 			Pct *float64 `json:"pct"`
 		} `json:"battery"`
-		People int `json:"people"`
+		People int         `json:"people"`
+		Health *store.Load `json:"health"`
 	}
 	if json.Unmarshal(data, &t) != nil {
 		return
 	}
 	p := store.TrackPoint{TS: now, NavState: t.Nav.State, People: t.People}
+	if t.Health != nil {
+		p.Load = *t.Health
+	}
 	if t.Pose != nil {
 		p.X, p.Y, p.Yaw = &t.Pose.X, &t.Pose.Y, &t.Pose.Yaw
 	}
@@ -181,6 +185,9 @@ func (s *Server) resolveCommand(ctx context.Context, rawID string, ok bool, msg 
 	cmd, found := s.pending[id]
 	delete(s.pending, id)
 	s.mu.Unlock()
+	if found && cmd.done != nil {
+		cmd.done <- ackResult{OK: ok, Msg: msg}
+	}
 	if !found || cmd.patrolID == 0 {
 		return
 	}

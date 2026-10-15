@@ -42,6 +42,8 @@ Robot side: `Pashupati/src/robot_fleet/API.md`. Dashboard side (Bearer session t
 | GET | `/api/v1/robots`, `/api/v1/robots/{id}/track` | view |
 | POST, PUT, DELETE | `/api/v1/robots[/{id}]`, `/api/v1/robots/{id}/token` | configure |
 | POST | `/api/v1/robots/{id}/command` (`pause`, `resume`, `localize`, `stop_patrol`, `estop`, `estop_release`) | operate |
+| POST | `/api/v1/robots/{id}/inspection` `{enabled?, model?, interval?}`, `/api/v1/robots/{id}/people` `{enabled}` (wait up to 10 s for the robot's ack) | operate |
+| GET | `/api/v1/inspection/models` (`NETRA_INSPECTION_MODELS`, comma-separated) | view |
 | GET / PUT | `/api/v1/routes[/{id}][/file]` | view / configure |
 | GET / POST, PUT, DELETE | `/api/v1/schedules[/{id}]` (`days` or `once_on`) | view / operate |
 | GET / POST | `/api/v1/patrols[/{id}]`, `/api/v1/patrols/{id}/stop` | view / operate |

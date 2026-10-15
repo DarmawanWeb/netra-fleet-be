@@ -114,6 +114,35 @@ check(r.status_code == 202 and any(m.get('name') == 'estop' for m in inbox if m.
       'robot got estop')
 check('public_url' in s.get(f'{API}/api/v1/info').json(), 'info endpoint')
 
+# inspection / people control: the server waits for the robot's ack
+def answer(name, ok, msg):
+    def run():
+        for _ in range(100):
+            c = next((m for m in inbox if m.get('type') == 'command' and m.get('name') == name and not m.get('_done')), None)
+            if c:
+                c['_done'] = True
+                ws.send(json.dumps({'type': 'ack', 'id': c['id'], 'ok': ok, 'msg': msg}))
+                return
+            time.sleep(0.05)
+    threading.Thread(target=run, daemon=True).start()
+
+models = s.get(f'{API}/api/v1/inspection/models').json()
+check('moondream:latest' in models, 'inspection models')
+answer('set_inspection', True, 'inspection on')
+r = s.post(f'{API}/api/v1/robots/{robot_id}/inspection', json={'enabled': True, 'model': models[0], 'interval': -1})
+check(r.status_code == 200 and r.json().get('ok') is True, f'set_inspection acked ({r.status_code})')
+answer('set_people', False, 'no people model')
+r = s.post(f'{API}/api/v1/robots/{robot_id}/people', json={'enabled': True})
+check(r.status_code == 422 and r.json().get('msg') == 'no people model', f'set_people refusal shown ({r.status_code})')
+check(s.post(f'{API}/api/v1/robots/{robot_id}/inspection', json={'model': 'nope'}).status_code == 400, 'unknown model refused')
+time.sleep(5.2)  # next telemetry history sample
+ws.send(json.dumps({'type': 'telemetry', 'ts': time.time(), 'pose': {'x': 1, 'y': 2, 'yaw': 0}, 'nav': {'state': 'NAV_INACTIVE'},
+                    'health': {'ok': True, 'level': 'ok', 'issues': [], 'cpu_percent': 42.5, 'gpu_percent': 17.0,
+                               'memory_percent': 61.0, 'memory_used_gb': 9.6, 'memory_total_gb': 15.7, 'cpu_temp_c': 55.0}}))
+time.sleep(0.5)
+track = s.get(f'{API}/api/v1/robots/{robot_id}/track').json()
+check(any(p.get('cpu_percent') == 42.5 and p.get('memory_total_gb') == 15.7 for p in track), 'robot load in the history')
+
 # a robot clock two hours behind (no NTP on the robot network): timestamps land on server time
 skewed = time.time() - 7200
 ws.send(json.dumps({'type': 'telemetry', 'ts': skewed, 'pose': {'x': 1, 'y': 2, 'yaw': 0},

@@ -51,6 +51,7 @@ type Server struct {
 type pendingCommand struct {
 	patrolID int64
 	name     string
+	done     chan ackResult // set when an HTTP request waits for the robot's answer
 }
 
 // New wires a server.
@@ -85,6 +86,9 @@ func (s *Server) Handler() http.Handler {
 	route(configure, "DELETE /api/v1/robots/{id}", s.deleteRobot)
 	route(configure, "POST /api/v1/robots/{id}/token", s.rotateRobotToken)
 	route(operate, "POST /api/v1/robots/{id}/command", s.robotCommand)
+	route(operate, "POST /api/v1/robots/{id}/inspection", s.robotInspection)
+	route(operate, "POST /api/v1/robots/{id}/people", s.robotPeople)
+	route(view, "GET /api/v1/inspection/models", s.inspectionModels)
 	route(view, "GET /api/v1/routes", s.listRoutes)
 	route(view, "GET /api/v1/routes/{id}", s.getRoute)
 	route(configure, "PUT /api/v1/routes/{id}", s.updateRoute)
@@ -187,6 +191,9 @@ func (s *statusRecorder) WriteHeader(code int) { s.status = code; s.ResponseWrit
 
 // audit records a user action without delaying the response.
 func (s *Server) audit(r *http.Request, action, target string, detail any) {
+	if s.store == nil { // unit tests without a database
+		return
+	}
 	entry := store.AuditEntry{Username: userOf(r).Username, Action: action, Target: target, IP: clientIP(r)}
 	if entry.Username == "" {
 		entry.Username = "-"

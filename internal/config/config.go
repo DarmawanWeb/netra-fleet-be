@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,8 @@ type Config struct {
 	AllowedOrigin    string
 	NatsURL          string
 	Lang             string // notification language: en | id
+	// InspectionModels are the vision models the dashboard offers for on-robot inspection.
+	InspectionModels []string
 }
 
 // Load reads the configuration, falling back to development defaults.
@@ -49,7 +52,20 @@ func Load() Config {
 		AllowedOrigin:    env("NETRA_ALLOWED_ORIGIN", "*"),
 		NatsURL:          env("NETRA_NATS_URL", ""),
 		Lang:             env("NETRA_LANG", "en"),
+		InspectionModels: list(env("NETRA_INSPECTION_MODELS",
+			"qwen3-vl:2b-instruct,moondream:latest,ahmadwaqar/smolvlm2-2.2b-instruct:latest")),
 	}
+}
+
+// list splits a comma-separated value, dropping blanks.
+func list(v string) []string {
+	out := []string{}
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func env(key, fallback string) string {
