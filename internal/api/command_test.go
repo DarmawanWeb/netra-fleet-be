@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/hub"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
 )
 
 func TestRobotCommandNames(t *testing.T) {

@@ -8,10 +8,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/detect"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/i18n"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/metrics"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/store"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/detect"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/i18n"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
 // RunPipeline processes queued anomalies: final detection, then the category rule.

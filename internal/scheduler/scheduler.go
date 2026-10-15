@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/store"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
 // StartFunc starts a patrol for a schedule.

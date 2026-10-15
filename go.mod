@@ -1,4 +1,4 @@
-module github.com/DarmawanRobotics/netra-fleet-be
+module github.com/DarmawanWeb/netra-fleet-be
 
 go 1.22.2
 

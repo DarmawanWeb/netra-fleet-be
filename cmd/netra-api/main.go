@@ -12,15 +12,15 @@ import (
 	"time"
 	_ "time/tzdata" // time zones without OS tzdata in the container
 
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/api"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/auth"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/bus"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/config"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/detect"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/hub"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/notify"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/scheduler"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/store"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/api"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/auth"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/bus"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/config"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/detect"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/notify"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/scheduler"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
 func main() {

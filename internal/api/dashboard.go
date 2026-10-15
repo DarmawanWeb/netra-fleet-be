@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/auth"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/hub"
-	"github.com/DarmawanRobotics/netra-fleet-be/internal/store"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/auth"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
 var (
