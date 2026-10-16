@@ -27,6 +27,8 @@ type Config struct {
 	Lang             string // notification language: en | id
 	// InspectionModels are the vision models the dashboard offers for on-robot inspection.
 	InspectionModels []string
+	// ExtTokenTTL is how long an integration API access token lives.
+	ExtTokenTTL time.Duration
 }
 
 // Load reads the configuration, falling back to development defaults.
@@ -36,6 +38,10 @@ func Load() Config {
 		tz = time.UTC
 	}
 	ttlHours, _ := strconv.Atoi(env("NETRA_SESSION_HOURS", "72"))
+	extMinutes, err := strconv.Atoi(env("NETRA_EXT_TOKEN_MINUTES", "60"))
+	if err != nil || extMinutes < 5 || extMinutes > 24*60 {
+		extMinutes = 60
+	}
 	return Config{
 		Addr:             env("NETRA_ADDR", ":8080"),
 		DatabaseURL:      env("NETRA_DATABASE_URL", "postgres://netra:netra@localhost:5432/netra?sslmode=disable"),
@@ -54,6 +60,7 @@ func Load() Config {
 		Lang:             env("NETRA_LANG", "en"),
 		InspectionModels: list(env("NETRA_INSPECTION_MODELS",
 			"qwen3-vl:2b-instruct,moondream:latest,ahmadwaqar/smolvlm2-2.2b-instruct:latest")),
+		ExtTokenTTL: time.Duration(extMinutes) * time.Minute,
 	}
 }
 

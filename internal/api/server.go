@@ -16,6 +16,7 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/bus"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/config"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/detect"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/ext"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/notify"
@@ -126,6 +127,16 @@ func (s *Server) Handler() http.Handler {
 	route(auth.PermUsers, "DELETE /api/v1/users/{id}", s.deleteUser)
 	route(auth.PermUsers, "POST /api/v1/users/{id}/password", s.resetPassword)
 	route(auth.PermAudit, "GET /api/v1/audit", s.listAudit)
+	route(auth.PermUsers, "GET /api/v1/api-clients", s.listClients)
+	route(auth.PermUsers, "POST /api/v1/api-clients", s.createClient)
+	route(auth.PermUsers, "PUT /api/v1/api-clients/{id}", s.updateClient)
+	route(auth.PermUsers, "POST /api/v1/api-clients/{id}/secret", s.rotateClientSecret)
+	route(auth.PermUsers, "DELETE /api/v1/api-clients/{id}", s.deleteClient)
+
+	// Integration API for third-party applications (client credentials, read only).
+	if s.store != nil {
+		ext.New(s.cfg, s.store, s.hub.Online).Register(mux)
+	}
 	mux.Handle("GET /metrics", metrics.Default)
 
 	robot := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.requireRobot(h)) }

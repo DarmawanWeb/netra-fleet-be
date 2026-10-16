@@ -1,0 +1,739 @@
+openapi: 3.0.3
+info:
+  title: NETRA Integration API
+  version: 1.0.0
+  description: |
+    Read-only access to the NETRA patrol command center (EZRA Robotics) for third-party applications:
+    the anomalies the robots detect, with their original photos (for example to run your own AI on
+    them), the robots, their patrols and recorded routes, and the floor plans.
+
+    ## Getting access
+
+    The NETRA administrator creates a client for you (Settings → API clients) and gives you a
+    `client_id` and a `client_secret`, plus the scopes you may use:
+
+    | Scope | Gives |
+    |---|---|
+    | `anomalies:read` | anomalies, their photos, anomaly categories |
+    | `robots:read` | robots and their last known state |
+    | `patrols:read` | patrols and recorded routes |
+    | `maps:read` | floor plans, their calibration and files |
+
+    Keep the secret on your server. If it leaks, ask for a new one: the old secret and every token
+    issued with it stop working at once.
+
+    ## Authentication (OAuth 2.0 client credentials)
+
+    1. `POST /api/ext/v1/oauth/token` with `grant_type=client_credentials`, sending the credentials
+       as HTTP Basic (`Authorization: Basic base64(client_id:client_secret)`) or as
+       `client_id` / `client_secret` form fields. You get an `access_token` valid for `expires_in`
+       seconds (one hour by default).
+    2. Call the other endpoints with `Authorization: Bearer <access_token>`.
+    3. When a call answers `401 invalid_token`, get a new token.
+
+    In this page, press **Authorize**, enter the client id and secret under *oauth2*, then use
+    **Try it out** on any endpoint.
+
+    ## Anomalies: the change feed
+
+    `GET /anomalies` returns anomalies **in the order they last changed**, oldest change first.
+    A new detection and every later change (final AI detection done, operator confirmed or
+    rejected) moves the anomaly to the end of the feed. Each page has a `next_cursor`:
+
+    * keep it, and ask for `?cursor=<next_cursor>` next time;
+    * while `has_more` is `true`, there is more right away;
+    * when `has_more` is `false`, you are up to date: poll again later (every 10 to 60 seconds)
+      with the same `next_cursor`.
+
+    Filters (`status`, `final`, `validated`, `category`, `robot_id`, `detected_from`,
+    `detected_to`) apply to every page; keep them the same while you follow one cursor. To start
+    from a point in time instead of the beginning, use `updated_since` on the first call.
+    Changes appear in the feed about two seconds after they happen.
+
+    Which anomalies to take depends on your use:
+
+    | You want | Filter |
+    |---|---|
+    | everything the robots detect, as early as possible | none |
+    | after the server's final AI detection | `final=true` |
+    | real anomalies only | `status=confirmed` |
+    | waiting for an operator | `status=needs_validation` |
+    | decided by an operator | `validated=true` |
+    | discarded by the AI or rejected by an operator | `status=dismissed,rejected` |
+
+    Anomaly statuses: `queued` (waiting for the final detection) → `analyzing` →
+    `needs_validation` (an operator must decide), `confirmed` (by rule or operator) or `dismissed`
+    (the final detection found nothing); an operator moves `needs_validation` to `confirmed` or
+    `rejected`.
+
+    ## Photos
+
+    `image_url` of an anomaly (or `GET /anomalies/{id}/image`) returns the original JPEG taken by
+    the robot camera, as it was uploaded (typically 1280 px wide). It needs the same bearer token.
+
+    ## Positions and floor plans
+
+    Positions are in the robot **map frame**: metres, `x` forward, `y` left, `yaw` in radians
+    counter-clockwise. A floor plan maps them to its pixels (y down) with
+    `px = origin_x_px + s·(cos θ·x + sin θ·y)`, `py = origin_y_px + s·(sin θ·x − cos θ·y)`,
+    where `s = px_per_m` and `θ = rotation_rad`.
+
+    ## Conventions
+
+    * Times are RFC 3339 in UTC (`2026-10-16T01:20:11.123456Z`); parameters accept any offset
+      (`2026-10-16T08:20:00+07:00`).
+    * Errors are JSON `{"error": "<code>", "error_description": "<text>"}` with codes
+      `invalid_request` (400), `invalid_client` (401, token endpoint), `invalid_token` (401),
+      `insufficient_scope` (403), `not_found` (404), `rate_limited` (429), `server_error` (500).
+    * Rate limit: 10 requests per second per client, bursts up to 30. Over it you get `429` with a
+      `Retry-After` header (seconds).
+    * Lists without a cursor answer `{"data": [...]}`; new fields may be added to any object, so
+      ignore fields you do not know.
+  contact:
+    name: EZRA Robotics
+servers:
+  - url: /api/ext/v1
+tags:
+  - name: Authentication
+  - name: Anomalies
+  - name: Robots
+  - name: Patrols
+  - name: Maps
+security:
+  - oauth2: []
+  - bearerAuth: []
+
+paths:
+  /oauth/token:
+    post:
+      tags: [Authentication]
+      summary: Get an access token
+      description: |
+        OAuth 2.0 client credentials grant (RFC 6749 §4.4). Send the client credentials as HTTP
+        Basic or as form fields. Ask for fewer scopes with `scope` (space-separated); by default
+        the token gets every scope of the client.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+            example:
+              grant_type: client_credentials
+              client_id: nc_3f9d0c1a2b7e4f60
+              client_secret: ncs_your-secret
+              scope: anomalies:read
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: Access token
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: '`invalid_request`, `unsupported_grant_type` or `invalid_scope`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: '`invalid_client`: unknown client, wrong secret or client disabled'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /anomalies:
+    get:
+      tags: [Anomalies]
+      summary: Anomaly change feed
+      description: |
+        Anomalies ordered by their last change (oldest first). Follow `next_cursor` to read every
+        new detection and every later change exactly once; see *Anomalies: the change feed* above.
+      security:
+        - oauth2: [anomalies:read]
+        - bearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          description: '`next_cursor` of the previous page. Leave out on the first call.'
+          schema: { type: string }
+        - name: updated_since
+          in: query
+          description: First call only (instead of `cursor`) - start with changes at or after this time.
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          description: Anomalies per page.
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: status
+          in: query
+          description: Only these statuses (comma-separated).
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/AnomalyStatus' }
+        - name: final
+          in: query
+          description: '`true`: only anomalies the server''s final AI detection has classified; `false`: only those still waiting for it.'
+          schema: { type: boolean }
+        - name: validated
+          in: query
+          description: '`true`: only anomalies an operator confirmed or rejected; `false`: only those no operator decided.'
+          schema: { type: boolean }
+        - name: category
+          in: query
+          description: Only these current categories (comma-separated), see `GET /categories`.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string }
+          example: [trash, spill]
+        - name: robot_id
+          in: query
+          schema: { type: string }
+        - name: detected_from
+          in: query
+          description: Only anomalies detected at or after this time.
+          schema: { type: string, format: date-time }
+        - name: detected_to
+          in: query
+          description: Only anomalies detected before this time.
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: One page of the feed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnomalyPage'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /anomalies/{id}:
+    get:
+      tags: [Anomalies]
+      summary: One anomaly
+      security:
+        - oauth2: [anomalies:read]
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The anomaly
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Anomaly' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /anomalies/{id}/image:
+    get:
+      tags: [Anomalies]
+      summary: Original photo of an anomaly
+      description: The JPEG the robot uploaded, unchanged. Supports `Range` and `If-Modified-Since`.
+      security:
+        - oauth2: [anomalies:read]
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: JPEG photo
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /categories:
+    get:
+      tags: [Anomalies]
+      summary: Anomaly categories
+      description: The categories NETRA uses (`category` of an anomaly) with their display labels.
+      security:
+        - oauth2: [anomalies:read]
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Categories
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Category' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /robots:
+    get:
+      tags: [Robots]
+      summary: Robots and their last known state
+      security:
+        - oauth2: [robots:read]
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Robots
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Robot' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /patrols:
+    get:
+      tags: [Patrols]
+      summary: Patrols in a time window
+      description: Newest first, at most 500. The window is 7 days by default and at most 93 days.
+      security:
+        - oauth2: [patrols:read]
+        - bearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          description: Created at or after (default `to` minus 7 days).
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Created before (default now).
+          schema: { type: string, format: date-time }
+        - name: robot_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Patrols
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Patrol' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /patrols/{id}:
+    get:
+      tags: [Patrols]
+      summary: One patrol
+      security:
+        - oauth2: [patrols:read]
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The patrol
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Patrol' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /routes:
+    get:
+      tags: [Patrols]
+      summary: Recorded routes
+      security:
+        - oauth2: [patrols:read]
+        - bearerAuth: []
+      parameters:
+        - name: robot_id
+          in: query
+          schema: { type: string }
+        - name: archived
+          in: query
+          description: '`true` lists archived routes instead of active ones.'
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Routes (without points)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Route' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /routes/{id}:
+    get:
+      tags: [Patrols]
+      summary: One route with its points
+      security:
+        - oauth2: [patrols:read]
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The route
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RouteDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /floor-plans:
+    get:
+      tags: [Maps]
+      summary: Floor plans and their calibration
+      security:
+        - oauth2: [maps:read]
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Floor plans
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/FloorPlan' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /floor-plans/{id}/file:
+    get:
+      tags: [Maps]
+      summary: Floor plan file
+      description: The uploaded layout (SVG, PNG or JPEG; `content_type` of the floor plan).
+      security:
+        - oauth2: [maps:read]
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The file
+          content:
+            image/svg+xml:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+            image/jpeg:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      description: Client credentials from the NETRA administrator.
+      flows:
+        clientCredentials:
+          tokenUrl: /api/ext/v1/oauth/token
+          scopes:
+            anomalies:read: Anomalies, their photos and categories
+            robots:read: Robots and their last known state
+            patrols:read: Patrols and recorded routes
+            maps:read: Floor plans, calibration and files
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: An access token from `POST /oauth/token` (starts with `nat_`).
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+
+  responses:
+    BadRequest:
+      description: '`invalid_request`: a parameter is missing or wrong'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: '`invalid_token`: no token, or it is unknown, expired or revoked - get a new one'
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, example: 'Bearer realm="netra", error="invalid_token"' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: '`insufficient_scope`: the token lacks the scope of this endpoint'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: '`not_found`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: '`rate_limited`: wait `Retry-After` seconds'
+      headers:
+        Retry-After:
+          schema: { type: integer, example: 1 }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, error_description]
+      properties:
+        error:
+          type: string
+          enum: [invalid_request, invalid_client, unsupported_grant_type, invalid_scope, invalid_token,
+            insufficient_scope, not_found, rate_limited, server_error]
+        error_description: { type: string }
+      example:
+        error: invalid_token
+        error_description: the access token is unknown, expired or revoked
+
+    TokenRequest:
+      type: object
+      required: [grant_type]
+      properties:
+        grant_type: { type: string, enum: [client_credentials] }
+        client_id: { type: string, description: Leave out when sent as HTTP Basic. }
+        client_secret: { type: string, description: Leave out when sent as HTTP Basic. }
+        scope:
+          type: string
+          description: Space-separated subset of the client's scopes; default all of them.
+          example: anomalies:read robots:read
+
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in, scope]
+      properties:
+        access_token: { type: string, example: nat_0QzR3m9nH0bq7mF2d3Jp1oVYlZk8wXy4t6uE5aBcDeF }
+        token_type: { type: string, enum: [Bearer] }
+        expires_in: { type: integer, description: Seconds the token stays valid., example: 3600 }
+        scope: { type: string, example: anomalies:read robots:read }
+
+    AnomalyStatus:
+      type: string
+      enum: [queued, analyzing, needs_validation, confirmed, rejected, dismissed]
+
+    Detection:
+      type: object
+      required: [category, confidence, description]
+      properties:
+        category: { type: string, example: trash }
+        confidence: { type: number, format: double, minimum: 0, maximum: 1, example: 0.86 }
+        description: { type: string, example: a plastic bottle and a paper cup on the floor }
+
+    Validation:
+      type: object
+      required: [result, validated_at]
+      properties:
+        result: { type: string, enum: [confirmed, rejected] }
+        validated_at: { type: string, format: date-time }
+
+    Position:
+      type: object
+      description: Robot map frame - metres, x forward, y left, yaw radians counter-clockwise.
+      required: [x, y, frame]
+      properties:
+        x: { type: number, format: double, example: 41.2 }
+        y: { type: number, format: double, example: -6.8 }
+        yaw: { type: number, format: double, nullable: true, example: 0.12 }
+        frame: { type: string, enum: [map] }
+
+    RobotRef:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, example: l1w-01 }
+        name: { type: string, example: L1W 01 }
+
+    Anomaly:
+      type: object
+      required: [id, uid, status, category, detected_at, updated_at, robot, early_detection, image_url]
+      properties:
+        id: { type: integer, format: int64, example: 1287 }
+        uid: { type: string, description: Unique id given by the robot., example: 6f1c2b0e-3a4d-4c1e-9b8a-2d5f7e9c1a3b }
+        status: { $ref: '#/components/schemas/AnomalyStatus' }
+        category:
+          type: string
+          description: Current category - the final detection (or the operator's correction) when there is one, else the robot's.
+          example: trash
+        detected_at: { type: string, format: date-time, description: When the robot took the photo. }
+        updated_at: { type: string, format: date-time, description: Last change; the feed order. }
+        robot: { $ref: '#/components/schemas/RobotRef' }
+        patrol_id: { type: integer, format: int64, nullable: true }
+        route_id: { type: integer, format: int64, nullable: true }
+        stop_index: { type: integer, nullable: true, description: Index of the route point where the robot stopped. }
+        position:
+          allOf: [{ $ref: '#/components/schemas/Position' }]
+          nullable: true
+        early_detection:
+          allOf: [{ $ref: '#/components/schemas/Detection' }]
+          description: The robot's own detection.
+        final_detection:
+          allOf: [{ $ref: '#/components/schemas/Detection' }]
+          nullable: true
+          description: The server's final AI detection; null while `queued` or `analyzing`. An operator may have corrected its category.
+        validation:
+          allOf: [{ $ref: '#/components/schemas/Validation' }]
+          nullable: true
+          description: The operator's decision; null when no operator decided.
+        image_url:
+          type: string
+          format: uri
+          description: The original JPEG; needs the bearer token.
+          example: https://netra.example.com/api/ext/v1/anomalies/1287/image
+
+    AnomalyPage:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Anomaly' }
+        next_cursor: { type: string, description: Pass as `cursor` for the next page or the next poll. }
+        has_more: { type: boolean, description: More pages are ready now. }
+
+    Category:
+      type: object
+      required: [category, label]
+      properties:
+        category: { type: string, example: floor_damage }
+        label: { type: string, example: Floor damage }
+
+    RobotState:
+      type: object
+      properties:
+        ts: { type: number, format: double, nullable: true, description: 'Robot clock of the telemetry, Unix seconds.' }
+        nav_state: { type: string, example: FOLLOWING }
+        mode: { type: string, example: auto }
+        battery_pct: { type: number, format: double, nullable: true, example: 76 }
+        people: { type: integer, description: People in view of the robot. }
+        estop: { type: boolean, description: Software e-stop latched. }
+        pose:
+          allOf: [{ $ref: '#/components/schemas/Position' }]
+          nullable: true
+        patrol:
+          type: object
+          nullable: true
+          properties:
+            patrol_id: { type: integer, format: int64, nullable: true }
+            route_id: { type: integer, format: int64, nullable: true }
+
+    Robot:
+      type: object
+      required: [id, name, online]
+      properties:
+        id: { type: string, example: l1w-01 }
+        name: { type: string, example: L1W 01 }
+        online: { type: boolean, description: Connected to NETRA right now. }
+        last_seen: { type: string, format: date-time, nullable: true }
+        floor_plan_id: { type: integer, format: int64, nullable: true }
+        state:
+          allOf: [{ $ref: '#/components/schemas/RobotState' }]
+          nullable: true
+          description: Last telemetry received; null if the robot never connected.
+
+    Patrol:
+      type: object
+      required: [id, robot_id, status, laps, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        robot_id: { type: string }
+        route_id: { type: integer, format: int64, nullable: true }
+        schedule_id: { type: integer, format: int64, nullable: true }
+        status: { type: string, enum: [requested, running, finished, stopped, failed] }
+        message: { type: string }
+        laps: { type: integer }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    Route:
+      type: object
+      required: [id, uid, robot_id, name, recorded_at, length_m, stops, closed, archived, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        uid: { type: string }
+        robot_id: { type: string }
+        name: { type: string, example: LG main corridor }
+        recorded_at: { type: string, format: date-time }
+        length_m: { type: number, format: double, example: 564.2 }
+        stops: { type: integer, description: Inspection stops (points with a dwell time). }
+        closed: { type: boolean, description: The route ends where it starts. }
+        archived: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    RoutePoint:
+      type: object
+      required: [x, y, yaw_deg, dwell_s]
+      properties:
+        x: { type: number, format: double }
+        y: { type: number, format: double }
+        yaw_deg: { type: number, format: double }
+        dwell_s: { type: number, format: double, description: Seconds the robot stops here; above 0 is an inspection stop. }
+
+    RouteDetail:
+      allOf:
+        - $ref: '#/components/schemas/Route'
+        - type: object
+          required: [points]
+          properties:
+            points:
+              type: array
+              items: { $ref: '#/components/schemas/RoutePoint' }
+
+    FloorPlan:
+      type: object
+      required: [id, name, content_type, width_px, height_px, origin_x_px, origin_y_px, px_per_m, rotation_rad, file_url]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string, example: Lower ground }
+        content_type: { type: string, example: image/svg+xml }
+        width_px: { type: number, format: double }
+        height_px: { type: number, format: double }
+        origin_x_px: { type: number, format: double, description: 'Pixel of the map origin (0, 0).' }
+        origin_y_px: { type: number, format: double }
+        px_per_m: { type: number, format: double, description: Scale; 0 means not calibrated. }
+        rotation_rad: { type: number, format: double }
+        created_at: { type: string, format: date-time }
+        file_url: { type: string, format: uri }

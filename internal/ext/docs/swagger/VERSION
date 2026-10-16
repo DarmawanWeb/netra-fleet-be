@@ -1,0 +1,2 @@
+swagger-ui-dist 5.32.8 (https://github.com/swagger-api/swagger-ui), Apache License 2.0, see LICENSE and NOTICE.
+Update: npm pack swagger-ui-dist@<version> and copy swagger-ui-bundle.js, swagger-ui.css, favicon-32x32.png, LICENSE, NOTICE.

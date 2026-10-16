@@ -25,6 +25,10 @@ Backend of **NETRA Fleet**, the patrol command center for Pashupati robots.
   `view`, `operate`, `configure`, `audit`, `users`), PBKDF2 passwords, session tokens, logout,
   login throttling (8 failures / 10 min per IP), the last admin cannot be removed.
 - **Audit log** — every login, failed login and change (method, path, user, IP).
+- **Integration API** — read-only `/api/ext/v1` for third-party applications: OAuth2 client
+  credentials (clients and scopes managed by admins), anomaly change feed with cursor and filters,
+  original photos, robots, patrols, routes, floor plans; OpenAPI at `/api/ext/v1/openapi.yaml`,
+  Swagger UI at `/api/ext/docs`. Guide: [INTEGRATION.md](INTEGRATION.md).
 - **Observability** — Prometheus `/metrics` (HTTP, robot messages, anomalies, battery, online),
   domain events on NATS (`netra.robot.<id>.<type>`, `netra.anomaly.<status>`).
 - **TimescaleDB** — `telemetry` and `audit_log` become hypertables with compression and 180-day
@@ -44,6 +48,7 @@ Robot side: `Pashupati/src/robot_fleet/API.md`. Dashboard side (Bearer session t
 | POST | `/api/v1/robots/{id}/command` (`pause`, `resume`, `localize`, `stop_patrol`, `estop`, `estop_release`) | operate |
 | POST | `/api/v1/robots/{id}/inspection` `{enabled?, model?, interval?}`, `/api/v1/robots/{id}/people` `{enabled}` (wait up to 10 s for the robot's ack) | operate |
 | GET | `/api/v1/inspection/models` (`NETRA_INSPECTION_MODELS`, comma-separated) | view |
+| GET, POST, PUT, DELETE | `/api/v1/api-clients[/{id}]`, `POST /api/v1/api-clients/{id}/secret` (integration clients) | users |
 | GET / PUT | `/api/v1/routes[/{id}][/file]` | view / configure |
 | GET / POST, PUT, DELETE | `/api/v1/schedules[/{id}]` (`days` or `once_on`) | view / operate |
 | GET / POST | `/api/v1/patrols[/{id}]`, `/api/v1/patrols/{id}/stop` | view / operate |

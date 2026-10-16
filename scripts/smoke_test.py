@@ -158,6 +158,54 @@ check(0 < age < 60, f'skewed robot clock corrected (anomaly {age:.0f} s old)')
 skew = {x['id']: x for x in s.get(f'{API}/api/v1/robots').json()}[robot_id]['clock_skew_s']
 check(skew is not None and abs(skew - 7200) < 30, f'clock skew reported ({skew} s)')
 
+# Integration API: an administrator creates a client, the third party follows the anomaly feed
+EXT = f'{API}/api/ext/v1'
+r = s.post(f'{API}/api/v1/api-clients', json={'name': 'Smoke partner', 'scopes': ['anomalies:read', 'robots:read']})
+check(r.status_code == 201 and r.json()['client_secret'].startswith('ncs_'), 'api client created, secret shown once')
+cli = r.json()['client']
+cid, csecret = cli['client_id'], r.json()['client_secret']
+check('client_secret' not in json.dumps(s.get(f'{API}/api/v1/api-clients').json()), 'secret not listed again')
+tok = requests.post(f'{EXT}/oauth/token', data={'grant_type': 'client_credentials'}, auth=(cid, csecret)).json()
+check(tok.get('token_type') == 'Bearer' and tok.get('scope') == 'anomalies:read robots:read', 'client credentials token')
+eh = {'Authorization': f"Bearer {tok['access_token']}"}
+seen, cursor, pages = [], None, 0
+while True:
+    page = requests.get(f'{EXT}/anomalies', headers=eh, params={'limit': 3, **({'cursor': cursor} if cursor else {})}).json()
+    seen += [x['id'] for x in page['data']]
+    cursor, pages = page['next_cursor'], pages + 1
+    if not page['has_more']:
+        break
+check(ids['trash'] in seen and len(seen) == len(set(seen)), f'feed read to the end ({len(seen)} anomalies, {pages} pages)')
+item = requests.get(f'{EXT}/anomalies/{ids["trash"]}', headers=eh).json()
+check(item['robot']['id'] == robot_id and item['image_url'].endswith(f'/anomalies/{ids["trash"]}/image')
+      and item['early_detection']['category'] == 'trash', 'anomaly in integration format')
+img = requests.get(item['image_url'].replace(item['image_url'].split('/api/')[0], API), headers=eh)
+check(img.status_code == 200 and img.headers['Content-Type'] == 'image/jpeg' and img.content == jpeg, 'original photo')
+# an operator decision moves the anomaly to the end of the feed
+check(s.post(f'{API}/api/v1/anomalies/{ids["trash"]}/validate', json={'decision': 'reject'}).status_code == 204,
+      'operator rejects an anomaly')
+time.sleep(2.5)  # changes enter the feed about 2 s later
+page = requests.get(f'{EXT}/anomalies', headers=eh, params={'cursor': cursor}).json()
+changed = {x['id']: x for x in page['data']}
+check(ids['trash'] in changed and changed[ids['trash']]['validation']['result'] == 'rejected', 'feed delivers the change')
+only = requests.get(f'{EXT}/anomalies', headers=eh, params={'status': 'rejected', 'validated': 'true'}).json()['data']
+check(only and all(x['status'] == 'rejected' and x['validation'] for x in only), 'status and validated filters')
+check(requests.get(f'{EXT}/patrols', headers=eh).status_code == 403, 'scope enforced')
+check(requests.get(f'{EXT}/robots', headers=eh).json()['data'][0]['id'], 'robots for the partner')
+rot = s.post(f"{API}/api/v1/api-clients/{cli['id']}/secret").json()
+check(requests.get(f'{EXT}/robots', headers=eh).status_code == 401, 'rotating the secret revokes tokens')
+check(requests.post(f'{EXT}/oauth/token', data={'grant_type': 'client_credentials'}, auth=(cid, csecret)).status_code == 401
+      and requests.post(f'{EXT}/oauth/token', data={'grant_type': 'client_credentials', 'client_id': cid,
+                                                       'client_secret': rot['client_secret']}).status_code == 200,
+      'old secret refused, new secret works')
+check(s.put(f"{API}/api/v1/api-clients/{cli['id']}", json={'name': 'Smoke partner', 'scopes': ['anomalies:read'],
+                                                             'enabled': False}).json()['enabled'] is False, 'client disabled')
+check(requests.post(f'{EXT}/oauth/token', data={'grant_type': 'client_credentials'},
+                    auth=(cid, rot['client_secret'])).status_code == 401, 'disabled client gets no token')
+check('openapi: 3.0.3' in requests.get(f'{EXT}/openapi.yaml').text and requests.get(f'{API}/api/ext/docs').ok,
+      'OpenAPI and Swagger UI served')
+check(s.delete(f"{API}/api/v1/api-clients/{cli['id']}").status_code == 204, 'client deleted')
+
 # RBAC
 viewer = f'viewer{uuid.uuid4().hex[:5]}'
 check(s.post(f'{API}/api/v1/users', json={'username': viewer, 'role': 'viewer', 'password': 'viewer-pass'}).status_code == 201,
