@@ -1,42 +1,86 @@
-# netra-fleet-be
+<div align="center">
 
-Backend of **NETRA Fleet**, the patrol command center for Pashupati robots.
+<img src="docs/logo.svg" width="96" alt="NETRA logo">
 
-| Service | Stack | |
-|---|---|---|
-| `netra-api` (`cmd/`, `internal/`) | Go 1.22, PostgreSQL / TimescaleDB | REST + WebSocket API, robot gateway, scheduler, anomaly pipeline, reports |
-| `netra-ai` (`ai/`) | Python, FastAPI, Ollama | final anomaly detection with a larger vision-language model |
+# NETRA Fleet backend
+
+**`netra-api` (Go) and `netra-ai` (FastAPI) of the NETRA patrol command center: the REST and
+WebSocket API, the robot gateway, the anomaly pipeline with AI final detection, the scheduler,
+reports, and the integration API for third-party applications.**
+
+[![CI](https://github.com/DarmawanWeb/netra-fleet-be/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DarmawanWeb/netra-fleet-be/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL%2016-TimescaleDB-4169E1?logo=postgresql&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-netra--ai-009688?logo=fastapi&logoColor=white)
+![Ollama](https://img.shields.io/badge/AI-Ollama%20VLM-000000?logo=ollama&logoColor=white)
+![NATS](https://img.shields.io/badge/events-NATS-27AAE1?logo=natsdotio&logoColor=white)
+![OpenAPI](https://img.shields.io/badge/integration-OpenAPI%203-6BA539?logo=openapiinitiative&logoColor=white)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
+[Features](#features) · [Services](#services) · [API](#api) · [Documentation](#documentation) ·
+[Develop](#develop)
+
+</div>
+
+---
+
+Part of [NETRA](https://github.com/DarmawanWeb/Netra), which deploys it with the
+[dashboard](https://github.com/DarmawanWeb/netra-fleet-fe). Robots run
+[Pashupati](https://github.com/DarmawanRobotics/Pashupati) and talk to the robot endpoints described
+in its [robot API](https://github.com/DarmawanRobotics/Pashupati/blob/main/src/robot_fleet/API.md).
 
 ## Features
 
-- **Robots** — token per robot, live state over WebSocket, commands (pause, resume, localize,
-  stop patrol, e-stop and e-stop release), telemetry history (5 s samples) for track playback and
-  battery charts.
-- **Robot clock correction** — a robot without NTP (its own Wi-Fi at a demo, no internet) keeps a
-  wrong clock; the offset is measured from every telemetry message and anomaly, crowd and route
-  timestamps are moved onto server time when it is above 2 s (`clock_skew_s` in `GET /robots`).
-- **Patrols** — start now, weekly or one-off schedules, status from the robot, laps, events, recap.
-- **Anomalies** — robot early detection → queue → `netra-ai` final detection → per-category rule
-  (auto-confirm + Telegram, or operator validation).
-- **Crowd** — per-minute people cells → heatmap and hourly/daily peaks.
-- **Reports** — patrol report PDF (summary, anomaly table and photos, timeline), period summary
-  PDF/XLSX, anomaly and patrol XLSX exports.
-- **Access control** — users with roles `viewer`, `operator`, `supervisor`, `admin` (permissions
-  `view`, `operate`, `configure`, `audit`, `users`), PBKDF2 passwords, session tokens, logout,
-  login throttling (8 failures / 10 min per IP), the last admin cannot be removed.
-- **Audit log** — every login, failed login and change (method, path, user, IP).
-- **Integration API** — read-only `/api/ext/v1` for third-party applications: OAuth2 client
-  credentials (clients and scopes managed by admins), anomaly change feed with cursor and filters,
-  original photos, robots, patrols, routes, floor plans; OpenAPI at `/api/ext/v1/openapi.yaml`,
-  Swagger UI at `/api/ext/docs`. Guide: [INTEGRATION.md](INTEGRATION.md).
-- **Observability** — Prometheus `/metrics` (HTTP, robot messages, anomalies, battery, online),
+**Robots**
+- A token per robot, live state over WebSocket, telemetry history (5 s samples) for track replay
+  and battery, load and people charts.
+- Commands with the robot's acknowledgement: pause, resume, localize, stop patrol, e-stop and its
+  release; AI inspection (on or off, model, pace) and people detection, waiting up to 10 s.
+- Clock correction: a robot without NTP keeps a wrong clock, so its offset is measured from every
+  telemetry message and anomaly, crowd and route times are moved onto server time when it is above
+  2 s (`clock_skew_s` in `GET /robots`).
+
+**Patrols**
+- Start now, weekly or one-off schedules; status from the robot, laps, stop events, recap.
+
+**Anomalies**
+- Robot early detection, then a queue, then `netra-ai` final detection, then a per-category rule:
+  confirm at once and send to a Telegram group, or wait for operator validation.
+
+**Crowd and reports**
+- Per-minute people cells become heatmaps and hourly and daily peaks.
+- Patrol report PDF (summary, anomaly table and photos, timeline), period summary PDF or Excel,
+  anomaly and patrol Excel exports, in English or Indonesian.
+
+**Integration API**
+- Read-only `/api/ext/v1` for third-party applications with OAuth2 client credentials (clients and
+  scopes managed by admins): an anomaly change feed with cursor and filters, original photos,
+  robots, patrols, routes and floor plans. OpenAPI at `/api/ext/v1/openapi.yaml`, Swagger UI at
+  `/api/ext/docs`, guide in [INTEGRATION.md](INTEGRATION.md).
+
+**Access and audit**
+- Roles `viewer`, `operator`, `supervisor`, `admin` over the permissions `view`, `operate`,
+  `configure`, `audit`, `users`; PBKDF2 passwords, session tokens, logout, login throttling
+  (8 failures in 10 min per IP); the last admin cannot be removed.
+- Audit log of every login, failed login and change (method, path, user, IP).
+
+**Observability and storage**
+- Prometheus `/metrics` (HTTP, robot messages, anomalies, battery, online, integration requests);
   domain events on NATS (`netra.robot.<id>.<type>`, `netra.anomaly.<status>`).
-- **TimescaleDB** — `telemetry` and `audit_log` become hypertables with compression and 180-day
-  retention when the extension is available; plain PostgreSQL works too.
+- With TimescaleDB, `telemetry` and `audit_log` become hypertables; telemetry is compressed after
+  7 days and kept 180 days. Plain PostgreSQL works too.
+
+## Services
+
+| Service | Source | Stack | |
+|---|---|---|---|
+| `netra-api` | `cmd/`, `internal/` | Go 1.22, PostgreSQL / TimescaleDB, NATS | REST and WebSocket API, robot gateway, scheduler, anomaly pipeline, reports, integration API |
+| `netra-ai` | `ai/` | Python 3.12, FastAPI, Ollama | Final anomaly detection with a larger vision-language model |
 
 ## API
 
-Robot side: `Pashupati/src/robot_fleet/API.md`. Dashboard side (Bearer session token):
+Dashboard side, with a Bearer session token (the full reference is [docs/api.md](docs/api.md)):
 
 | Method | Path | Permission |
 |---|---|---|
@@ -59,10 +103,23 @@ Robot side: `Pashupati/src/robot_fleet/API.md`. Dashboard side (Bearer session t
 | GET | `/api/v1/reports/patrols/{id}/pdf`, `/api/v1/reports/summary?format=pdf\|xlsx`, `/api/v1/reports/anomalies`, `/api/v1/reports/patrols` | view |
 | GET, POST, PUT, DELETE | `/api/v1/users[/{id}]`, `/api/v1/users/{id}/password` | users |
 | GET | `/api/v1/audit` | audit |
-| GET | `/api/v1/ws` | view |
+| GET | `/api/v1/ws` (live feed) | view |
 
-Time ranges use `from`/`to` (RFC 3339, default last 7 days). Reports take `lang=en|id` (default
-`en`); Telegram captions use `NETRA_LANG`.
+Time ranges use `from` and `to` (RFC 3339, default the last 7 days). Reports take `lang=en|id`
+(default `en`); Telegram captions use `NETRA_LANG`. Third-party applications use `/api/ext/v1`
+instead ([INTEGRATION.md](INTEGRATION.md)).
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [Architecture](docs/architecture.md) | Components, package map, request and robot lifecycles, anomaly pipeline, patrols and scheduler, crowd, reports, metrics |
+| [Dashboard API](docs/api.md) | Every `/api/v1` route with its permission, authentication, errors, the live WebSocket, robot endpoints |
+| [Database](docs/database.md) | How migrations are applied, each migration in order, the tables |
+| [Configuration](docs/configuration.md) | Environment variables of `netra-api`, `netra-ai` and the smoke test |
+| [Development](docs/development.md) | Local setup, tests, lint, smoke test, CI, hooks, adding endpoints and migrations, releases |
+| [AI service](docs/ai-service.md) | `netra-ai`: endpoints, prompt and answer handling, metrics, tests, image |
+| [Integration guide](INTEGRATION.md) | The read-only API for third-party applications, with a Python poller |
 
 ## Develop
 
@@ -75,6 +132,8 @@ make smoke               # end-to-end against a running API
 lefthook install         # git hooks: gofmt, vet, golangci-lint, ruff, conventional commits
 ```
 
-CI (`.github/workflows/ci.yml`) lints and tests both services (API against TimescaleDB, including
-the end-to-end smoke test) and pushes multi-arch images `ghcr.io/<owner>/netra-api` and
-`ghcr.io/<owner>/netra-ai` on `main` and `v*` tags.
+CI ([ci.yml](.github/workflows/ci.yml)) lints and tests both services, runs the API against
+TimescaleDB including the end-to-end smoke test, and pushes multi-arch images
+`ghcr.io/<owner>/netra-api` and `ghcr.io/<owner>/netra-ai` on `main` and `v*` tags.
+
+Released under the [Apache License 2.0](LICENSE).
