@@ -24,10 +24,11 @@ func fakeRobot(t *testing.T, s *Server, id string, reply func(name string, args 
 		}
 		s.hub.AddRobot(id, hub.NewConn(ws))
 	}))
-	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	client, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	resp.Body.Close()
 	for i := 0; i < 50 && !s.hub.Online(id); i++ {
 		time.Sleep(10 * time.Millisecond)
 	}

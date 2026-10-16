@@ -36,5 +36,5 @@ func TestWritePDF(t *testing.T) {
 	if !bytes.HasPrefix(buf.Bytes(), []byte("%PDF")) || buf.Len() < 3000 {
 		t.Fatalf("not a PDF (%d bytes)", buf.Len())
 	}
-	_ = os.WriteFile(filepath.Join(os.TempDir(), "netra_test_report.pdf"), buf.Bytes(), 0o644)
+	_ = os.WriteFile(filepath.Join(t.TempDir(), "netra_test_report.pdf"), buf.Bytes(), 0o600)
 }

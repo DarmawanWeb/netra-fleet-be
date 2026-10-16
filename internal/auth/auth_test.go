@@ -11,7 +11,8 @@ func TestPasswordRoundTrip(t *testing.T) {
 
 func TestTokenHashIsStable(t *testing.T) {
 	tok := NewToken()
-	if HashToken(tok) != HashToken(tok) || HashToken(tok) == HashToken(NewToken()) {
+	first, again := HashToken(tok), HashToken(tok)
+	if first != again || first == HashToken(NewToken()) {
 		t.Fatal("token hash not stable/unique")
 	}
 }
