@@ -1,5 +1,6 @@
 // Package app runs NETRA: the database (external or the installation's own), the API, the
-// dashboard, the scheduler, the anomaly pipeline and the backups, as one service.
+// dashboard, the robot gateway, the scheduler, the anomaly pipeline and the backups, as one
+// service or split by role (NETRA_ROLES) across processes that talk over NATS.
 package app
 
 import (
@@ -24,6 +25,8 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/notify"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/pgmanaged"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/role"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/scheduler"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/tlsutil"
@@ -79,16 +82,31 @@ func PGTool(cfg config.Config, name string) (string, error) {
 	return backup.FindTool(cfg.PGBin, name)
 }
 
-// Serve runs NETRA until ctx ends.
+// Serve runs NETRA until ctx ends: every role in this process (NETRA_ROLES=all, the default),
+// or some of them, the others running in other processes reached over NATS.
 func Serve(ctx context.Context, cfg config.Config) error {
 	started := time.Now()
+	roles, err := role.Parse(cfg.Roles)
+	if err != nil {
+		return err
+	}
+	if err := checkRoles(cfg, roles); err != nil {
+		return err
+	}
+	nc, err := dialNATS(ctx, cfg, roles)
+	if err != nil {
+		return err
+	}
+	if nc != nil {
+		defer nc.Close()
+	}
 	db, err := OpenDatabase(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("database: %w", err)
 	}
 	defer db.Close()
 	st := db.Store
-	if cfg.AdminPassword != "" {
+	if cfg.AdminPassword != "" && roles.Has(role.API) {
 		if err := st.EnsureUser(ctx, cfg.AdminUser, auth.HashPassword(cfg.AdminPassword), "admin"); err != nil {
 			return fmt.Errorf("admin user: %w", err)
 		}
@@ -97,34 +115,41 @@ func Serve(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("license: %w", err)
 	}
-	var nc *bus.Client
-	if cfg.NatsURL != "" {
-		if nc, err = bus.Dial(cfg.NatsURL, bus.Options{Name: "netra-api"}); err != nil {
-			slog.Error("nats disabled", "err", err) // domain events only: the service runs without them
-		} else {
-			defer nc.Close()
-		}
-	}
 	srv := api.New(cfg, st, hub.New(), notify.NewTelegram(cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPI),
 		Detector(cfg), bus.NewPublisher(nc), lic)
+	srv.SetRoles(roles)
+	if !roles.All() {
+		rl := relay.NewNATS(nc, relayHandlers(srv, roles, func() { reloadLicense(cfg, st, lic) }), relay.Options{})
+		if err := rl.Start(); err != nil {
+			return fmt.Errorf("relay: %w", err)
+		}
+		defer rl.Close()
+		srv.SetRelay(rl)
+		slog.Info("split installation", "roles", roles.String(), "node", rl.Node())
+	}
 
 	rt := api.Runtime{StartedAt: started, ManagedDB: db.Managed != nil, DataDir: cfg.DataDir, BackupAt: cfg.BackupAt}
-	if cfg.BackupKeepDays > 0 {
+	if cfg.BackupKeepDays > 0 && (roles.Has(role.API) || roles.Has(role.Worker)) {
 		if tool, err := PGTool(cfg, "pg_dump"); err == nil {
 			rt.Backups = &backup.Backups{Dir: filepath.Join(cfg.DataDir, "backups"), PGDump: tool, URL: db.URL,
 				KeepDays: cfg.BackupKeepDays}
-			go rt.Backups.Schedule(ctx, cfg.BackupAt, cfg.TimeZone)
+			if roles.Has(role.Worker) {
+				go rt.Backups.Schedule(ctx, cfg.BackupAt, cfg.TimeZone)
+			}
 		} else {
 			slog.Info("built-in backups off: no pg_dump on this host")
 		}
 	}
 
-	files, ok, err := web.Files(cfg.WebDir)
-	if err != nil {
-		return fmt.Errorf("dashboard files: %w", err)
-	}
-	if ok {
-		srv.SetWeb(web.Handler(files))
+	ok := false
+	if roles.Has(role.API) {
+		files, found, err := web.Files(cfg.WebDir)
+		if err != nil {
+			return fmt.Errorf("dashboard files: %w", err)
+		}
+		if ok = found; ok {
+			srv.SetWeb(web.Handler(files))
+		}
 	}
 
 	httpServer := &http.Server{Addr: cfg.Addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
@@ -135,8 +160,10 @@ func Serve(ctx context.Context, cfg config.Config) error {
 	rt.TLS = certFile != ""
 	srv.SetRuntime(rt)
 
-	go srv.RunPipeline(ctx)
-	go scheduler.Run(ctx, st, cfg.TimeZone, srv.StartPatrol)
+	if roles.Has(role.Worker) {
+		go srv.RunPipeline(ctx)
+		go scheduler.Run(ctx, st, cfg.TimeZone, srv.StartPatrol)
+	}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -144,8 +171,9 @@ func Serve(ctx context.Context, cfg config.Config) error {
 		_ = httpServer.Shutdown(shutdown)
 	}()
 
-	slog.Info("netra listening", "addr", cfg.Addr, "tls", rt.TLS, "dashboard", ok, "managed_db", rt.ManagedDB,
-		"tz", cfg.TimeZone.String(), "version", version.String(), "installation", lic.Installation())
+	slog.Info("netra listening", "addr", cfg.Addr, "roles", roles.String(), "tls", rt.TLS, "dashboard", ok,
+		"managed_db", rt.ManagedDB, "tz", cfg.TimeZone.String(), "version", version.String(),
+		"installation", lic.Installation())
 	if rt.TLS {
 		httpServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		err = httpServer.ListenAndServeTLS(certFile, keyFile)
@@ -156,6 +184,69 @@ func Serve(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	return nil
+}
+
+// checkRoles refuses a split setup that cannot work.
+func checkRoles(cfg config.Config, roles role.Set) error {
+	if roles.All() {
+		return nil
+	}
+	if cfg.NatsURL == "" {
+		return fmt.Errorf("NETRA_ROLES=%s needs NETRA_NATS_URL: the processes of a split installation talk over NATS",
+			roles)
+	}
+	if cfg.PGBin != "" {
+		return fmt.Errorf("NETRA_ROLES=%s cannot use NETRA_PG_BIN: the private database belongs to one process, "+
+			"split roles share one PostgreSQL through NETRA_DATABASE_URL", roles)
+	}
+	return nil
+}
+
+// dialNATS connects to NETRA_NATS_URL. With every role in this process NATS only carries the
+// domain events, so a bad URL disables them; a split process needs NATS and waits for it, and
+// gives up only when the server refuses it (an unreachable server is retried in the background).
+func dialNATS(ctx context.Context, cfg config.Config, roles role.Set) (*bus.Client, error) {
+	if cfg.NatsURL == "" {
+		return nil, nil
+	}
+	nc, err := bus.Dial(cfg.NatsURL, bus.Options{Name: "netra " + roles.String()})
+	if roles.All() {
+		if err != nil {
+			slog.Error("nats disabled", "err", err)
+			return nil, nil
+		}
+		return nc, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("NETRA_NATS_URL: %w", err)
+	}
+	wait, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := nc.WaitConnected(wait); err != nil {
+		var refused *bus.ServerError
+		if errors.As(err, &refused) {
+			nc.Close()
+			return nil, fmt.Errorf("NETRA_NATS_URL: %w", err)
+		}
+		slog.Warn("nats not reachable yet, retrying in the background", "err", err)
+	}
+	return nc, nil
+}
+
+// relayHandlers keeps the ends of the relay of the roles this process runs.
+func relayHandlers(srv *api.Server, roles role.Set, reloadLicense func()) relay.Handlers {
+	h := srv.Handlers()
+	if !roles.Has(role.API) {
+		h.Dashboards = nil
+	}
+	if !roles.Has(role.Gateway) {
+		h.Gateway = nil
+	}
+	if !roles.Has(role.Worker) {
+		h.Wake, h.Alert = nil, nil
+	}
+	h.License = reloadLicense
+	return h
 }
 
 // Detector picks the final detection: an external service (NETRA_FINAL_DETECTOR_URL), the
@@ -201,21 +292,7 @@ func LoadLicense(ctx context.Context, cfg config.Config, st *store.Store) (*lice
 		return nil, err
 	}
 	lic := license.NewState(keys, installation)
-	var cands []license.Candidate
-	if cfg.LicenseFile != "" {
-		raw, err := os.ReadFile(cfg.LicenseFile)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("license file", "path", cfg.LicenseFile, "err", err)
-		}
-		cands = append(cands, license.Candidate{Text: string(raw), Source: "file"})
-	}
-	cands = append(cands, license.Candidate{Text: cfg.License, Source: "env"})
-	uploaded, err := st.UploadedLicense(ctx)
-	if err != nil {
-		slog.Warn("uploaded license", "err", err)
-	}
-	cands = append(cands, license.Candidate{Text: uploaded, Source: "upload"})
-	lic.Load(cands...)
+	lic.Load(licenseCandidates(ctx, cfg, st)...)
 
 	info := lic.Info()
 	switch {
@@ -232,4 +309,31 @@ func LoadLicense(ctx context.Context, cfg config.Config, st *store.Store) (*lice
 		}
 	}
 	return lic, nil
+}
+
+// licenseCandidates are the license file, NETRA_LICENSE and the upload kept in the database.
+func licenseCandidates(ctx context.Context, cfg config.Config, st *store.Store) []license.Candidate {
+	var cands []license.Candidate
+	if cfg.LicenseFile != "" {
+		raw, err := os.ReadFile(cfg.LicenseFile)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("license file", "path", cfg.LicenseFile, "err", err)
+		}
+		cands = append(cands, license.Candidate{Text: string(raw), Source: "file"})
+	}
+	cands = append(cands, license.Candidate{Text: cfg.License, Source: "env"})
+	uploaded, err := st.UploadedLicense(ctx)
+	if err != nil {
+		slog.Warn("uploaded license", "err", err)
+	}
+	return append(cands, license.Candidate{Text: uploaded, Source: "upload"})
+}
+
+// reloadLicense applies the license again after another process of a split installation changed it.
+func reloadLicense(cfg config.Config, st *store.Store, lic *license.State) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	lic.Load(licenseCandidates(ctx, cfg, st)...)
+	info := lic.Info()
+	slog.Info("license reloaded", "id", info.ID, "status", info.Status, "features", info.Features)
 }

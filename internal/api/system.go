@@ -135,5 +135,9 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "database unavailable"})
 		return
 	}
+	if err := s.relay.Ready(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "nats unavailable"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "version": version.String()})
 }

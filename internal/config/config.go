@@ -24,7 +24,10 @@ type Config struct {
 	SessionTTL       time.Duration
 	AllowedOrigin    string
 	NatsURL          string
-	Lang             string // notification language: en | id
+	// Roles is what this process runs: "all", or a comma list of api, gateway and worker for a
+	// split installation whose processes talk over NATS (NatsURL).
+	Roles string
+	Lang  string // notification language: en | id
 	// InspectionModels are the vision models the dashboard offers for on-robot inspection.
 	InspectionModels []string
 	// ExtTokenTTL is how long an integration API access token lives.
@@ -89,6 +92,7 @@ func Load() Config {
 		SessionTTL:       time.Duration(ttlHours) * time.Hour,
 		AllowedOrigin:    env("NETRA_ALLOWED_ORIGIN", "*"),
 		NatsURL:          env("NETRA_NATS_URL", ""),
+		Roles:            env("NETRA_ROLES", "all"),
 		Lang:             env("NETRA_LANG", "en"),
 		InspectionModels: list(env("NETRA_INSPECTION_MODELS",
 			"qwen3-vl:2b-instruct,moondream:latest,ahmadwaqar/smolvlm2-2.2b-instruct:latest")),
