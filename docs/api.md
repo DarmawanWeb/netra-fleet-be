@@ -60,7 +60,7 @@ Errors are JSON with a single human-readable message:
 | 401 | `login required` (missing, unknown or expired session, or disabled user); `wrong username or password` at login; `unknown robot token` on robot routes |
 | 403 | `your role cannot do this`; `feature not licensed` with `"feature": "<module>"` on a module the license does not include ([licensing](licensing.md)); `robot limit of the license reached` with `robot_limit`; on robot routes an `X-Robot-Id` that does not match the token, or another robot's route |
 | 404 | `not found` |
-| 409 | Robot offline, robot ID or username already taken, patrol cannot start, last enabled admin |
+| 409 | Robot offline, robot ID or username already taken, patrol cannot start, last enabled admin; `this deployment uses <mode> maps` with `"map_mode": "<mode>"` on a route of another [map mode](#map-modes); a robot map cannot be calibrated |
 | 422 | The robot refused `set_inspection` or `set_people`; body `{"ok": false, "msg": "..."}` |
 | 429 | Too many failed logins from this IP (8 within 10 minutes) |
 | 500 | Database or file error; the message is the error text |
@@ -131,8 +131,9 @@ file missing on disk gets a plain-text 404.
 `last_telemetry` is the robot's last telemetry message as sent. `clock_skew_s` is how many seconds
 the robot clock is behind the server (negative: ahead), `null` until the robot has sent telemetry
 since the server started. A track point is
-`{ts, x, y, yaw, battery, nav_state, people, cpu_percent, gpu_percent, memory_percent, memory_used_gb, memory_total_gb, cpu_temp_c}`;
-position, battery and load are `null` when the robot did not report them.
+`{ts, x, y, yaw, lat, lon, battery, nav_state, people, cpu_percent, gpu_percent, memory_percent, memory_used_gb, memory_total_gb, cpu_temp_c}`;
+position, battery and load are `null` when the robot did not report them (`lat` and `lon` are its
+[GPS](#gps-in-telemetry) position).
 
 ### Routes
 
@@ -283,13 +284,30 @@ Module `crowd`, with `POST /api/v1/robots/{id}/people`.
 | GET | `/api/v1/crowd/heatmap` | view | `robot_id`, `from`, `to` → cells `{x, y, size, peak, mean, samples}`, `x`, `y` and `size` in map metres |
 | GET | `/api/v1/crowd/timeline` | view | `robot_id`, `bucket` (`hour` by default, or `day`), `from`, `to` → `{bucket, peak}` points, buckets truncated in `NETRA_TZ` |
 
+### Map modes
+
+The license fixes the kind of map a deployment draws on (`map_mode` in `GET /api/v1/info`):
+`floorplan` (an uploaded layout calibrated by hand), `pgm` (the robot's own occupancy grid) or
+`gps` (outdoor, latitude and longitude). Uploads exist only for the deployment's kind of map, and
+the georeference only in `gps`; other modes answer
+`409 {"error": "this deployment uses <mode> maps", "map_mode": "<mode>"}`. Plans that exist stay
+viewable and assignable in every mode ([architecture](architecture.md#map-modes)).
+
+| Route | `floorplan` | `pgm` | `gps` |
+|---|---|---|---|
+| `POST /api/v1/floorplans` | yes | 409 | 409 |
+| `POST /api/v1/floorplans/pgm` | 409 | yes | 409 |
+| `/api/v1/geo...` | 409 | 409 | yes |
+| other floor plan routes | yes | yes | yes |
+
 ### Floor plans
 
 | Method | Path | Permission | What it does |
 |---|---|---|---|
 | GET | `/api/v1/floorplans` | view | → plans ordered by ID, with calibration |
-| POST | `/api/v1/floorplans` | configure | Multipart: `file` (`.svg`, `.png`, `.jpg`, `.jpeg` or `.pdf`, up to 32 MiB), optional `name` (default: the file name without extension), `width_px`, `height_px` → 201 `{id}` |
-| PUT | `/api/v1/floorplans/{id}` | configure | Calibration body, `name` and `px_per_m` > 0 required; replaces name, size and calibration |
+| POST | `/api/v1/floorplans` | configure, `floorplan` maps | Multipart: `file` (`.svg`, `.png`, `.jpg`, `.jpeg` or `.pdf`, up to 32 MiB), optional `name` (default: the file name without extension), `width_px`, `height_px` → 201 `{id}` |
+| POST | `/api/v1/floorplans/pgm` | configure, `pgm` maps | A robot map, multipart: `yaml` (the `map.yaml` text, as a field or a file), `image` (its `.pgm`, P5 8- or 16-bit or plain P2, or a PNG), optional `name` (default: the yaml file name, else the image's) → 201 `{id, name, width_px, height_px, resolution, origin}`; 400 with the reason for a yaml or image that cannot be read. Up to 64 MiB, 10 000 px a side |
+| PUT | `/api/v1/floorplans/{id}` | configure | Calibration body, `name` and `px_per_m` > 0 required; replaces name, size and calibration; 409 for a robot map, which its `map.yaml` places |
 | DELETE | `/api/v1/floorplans/{id}` | configure | Deletes the plan and its file; robots showing it get `floor_plan_id` `null` |
 | GET | `/api/v1/floorplans/{id}/file` | view | → the file with its content type and `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'` |
 
@@ -297,6 +315,7 @@ Module `crowd`, with `POST /api/v1/robots/{id}/people`.
 {
   "id": 1,
   "name": "Ground floor",
+  "kind": "floorplan",
   "content_type": "image/svg+xml",
   "width_px": 2400,
   "height_px": 1600,
@@ -304,13 +323,90 @@ Module `crowd`, with `POST /api/v1/robots/{id}/people`.
   "origin_y_px": 1033,
   "px_per_m": 20,
   "rotation_rad": 0,
-  "created_at": "2026-10-01T02:00:00.779102Z"
+  "created_at": "2026-10-01T02:00:00.779102Z",
+  "resolution": null,
+  "origin": null
 }
 ```
 
 A map position `(x, y)` in metres becomes a plan pixel with
 `px = origin_x_px + s·(cos θ·x + sin θ·y)` and `py = origin_y_px + s·(sin θ·x − cos θ·y)`, where
 `s = px_per_m` and `θ = rotation_rad` (the same formula as in [INTEGRATION.md](../INTEGRATION.md)).
+
+A robot map has `kind` `pgm`, `content_type` `image/png` (the map rendered with the occupancy of
+ROS map_server: free light, occupied dark, unknown grey), `resolution` (metres per pixel) and
+`origin` (`[x, y, yaw]` of the lower-left pixel), both from its `map.yaml`. Its calibration comes
+from them, so the formula above puts map positions on the right pixel:
+
+```text
+px_per_m     = 1 / resolution
+rotation_rad = yaw
+origin_x_px  = −px_per_m · (cos yaw · ox + sin yaw · oy)
+origin_y_px  = height_px + px_per_m · (cos yaw · oy − sin yaw · ox)
+```
+
+`map.yaml` is read with the flat keys `image`, `resolution`, `origin` (`[x, y, yaw]`, as a flow or
+block list), `negate` (0 or 1), `occupied_thresh` and `free_thresh` (default 0.65 and 0.196, the
+values `map_saver` writes) and `mode` (`trinary` by default, `scale` or `raw`), as nav2
+map_server reads them.
+
+### Site georeference
+
+`gps` maps only. One georeference per deployment places the robot map frame on the earth, and
+says what to draw under it.
+
+| Method | Path | Permission | What it does |
+|---|---|---|---|
+| GET | `/api/v1/geo` | view | → the site, below |
+| PUT | `/api/v1/geo` | configure | `{points, heading_deg, basemap}`: replaces the control points and the basemap and fits the transform → the site; 400 with the reason when the points cannot be fitted or the basemap is invalid. No points and no heading: no georeference (the basemap is still saved). Broadcasts `{"type": "geo"}` |
+| POST | `/api/v1/geo/fit` | configure | `{points, heading_deg}` → `{points, transform}`: the fit without saving it, as the site page shows it while points are edited; 400 when it cannot be fitted |
+| POST | `/api/v1/geo/overlay` | configure | Multipart `image` (PNG, JPEG or WebP, north up, up to 64 MiB), `north`, `south`, `east`, `west` (degrees, at most 1° across) and optional `opacity` (0.05 to 1, default 1) → the site. Without an image (or as a plain form) only the bounds and opacity of the current image change. Broadcasts `geo` |
+| GET | `/api/v1/geo/overlay/file` | view | → the overlay image (`?token=` like other files), cached a day; 404 without one |
+| DELETE | `/api/v1/geo/overlay` | configure | Removes the overlay and its file → 204. Broadcasts `geo` |
+
+```json
+{
+  "points": [
+    {"label": "Gate", "x": 0, "y": 0, "lat": -6.2, "lon": 106.816, "residual_m": 0.16},
+    {"label": "Transformer T1", "x": 60, "y": 0, "lat": -6.19973, "lon": 106.81647, "residual_m": 0.09},
+    {"label": "Control room", "x": 0, "y": 40, "lat": -6.19969, "lon": 106.81582, "residual_m": 0.14}
+  ],
+  "heading_deg": null,
+  "transform": {
+    "ref_lat": -6.1998067, "ref_lon": 106.8160967, "scale": 0.99825, "rotation_rad": 0.52466,
+    "east_m": -10.61, "north_m": -21.52, "method": "points", "rms_m": 0.13, "heading_deg": 59.94
+  },
+  "basemap": {"kind": "osm", "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png", "attribution": "© OpenStreetMap contributors", "max_zoom": 19},
+  "overlay": {"url": "/api/v1/geo/overlay/file?v=overlay-1793769951211781164", "content_type": "image/png",
+    "north": -6.199, "south": -6.201, "east": 106.8175, "west": 106.815, "opacity": 0.9, "updated_at": "2026-11-04T05:25:51.211902Z"},
+  "presets": [{"kind": "osm", "...": "..."}, {"kind": "satellite", "...": "..."}],
+  "updated_by": "admin",
+  "updated_at": "2026-11-04T05:25:51.211902Z"
+}
+```
+
+- **Control points** `{label, x, y, lat, lon}` are the same places in map metres and WGS84
+  degrees (at most 64, labels up to 64 characters). Two or more are fitted by least squares; one
+  needs `heading_deg`, the compass heading of the map x axis (degrees clockwise from north), and
+  gives a scale of 1. `heading_deg` is ignored with two or more points.
+- **Transform**: `east = scale·(cos θ·x − sin θ·y) + east_m`, `north = scale·(sin θ·x + cos θ·y) + north_m`
+  with `θ = rotation_rad`, in the tangent plane of the WGS84 ellipsoid at `ref_lat`, `ref_lon` (the
+  centre of the points), then onto the ellipsoid; the inverse undoes it exactly. `heading_deg` of
+  the transform is the compass heading of the map x axis, a robot's heading is
+  `heading_deg − yaw` in degrees. `residual_m` is the ground distance between a point and where the
+  transform puts its map position, `rms_m` their root mean square; with two points both are 0.
+- **Refused fits** (400): fewer than two points without a heading, points at one map position or
+  one latitude/longitude, a scale outside 0.5 to 2 (the robot map is in metres, so map and earth
+  positions are not the same places), points more than 20 km from their centre, positions that
+  are not numbers or not on the earth.
+- **Basemap** `{kind, url, attribution, max_zoom}`: `osm` (OpenStreetMap), `satellite` (Esri World
+  Imagery), `custom` or `none`. For the presets the server fills in the URL, attribution and zoom.
+  A custom `url` is a tile template with `{z}`, `{x}` and `{y}` (or `{-y}`) starting with
+  `https://`, `http://` or `/` (a tile server behind the same proxy, for sites without internet),
+  `max_zoom` 1 to 24 (default 19), `attribution` plain text up to 300 characters. Tiles load in the
+  operator's browser, which needs to reach the tile server.
+- **Overlay**: an image of the site (drone or aerial photo, north up) stretched over its bounds,
+  drawn over the basemap; it works offline.
 
 ### Reports
 
@@ -392,6 +488,7 @@ reload state from the REST API after a reconnect.
 | `route` | `robot_id`, `id` | A robot uploaded a route (also when the upload repeats an existing one) |
 | `anomaly` | `id`, `status`, and depending on the event `robot_id`, `category`, `notified` | Upload (`queued`, with `robot_id`), final detection (with `robot_id` and `category`), operator decision, Telegram alert sent (`notified: true`) |
 | `license` | `license` (as in `GET /api/v1/license`) | A license was uploaded in the dashboard |
+| `geo` | none | The site georeference or its overlay changed (`gps` maps) |
 
 ```json
 {"type": "robot_online", "robot_id": "l1w-01", "online": true}
@@ -417,6 +514,26 @@ the server side is described in [architecture](architecture.md#robot-connection-
 | POST | `/api/v1/robot/anomalies` | Multipart `meta` (JSON with `uid`) and `image.jpg` → 201 `{id, created}`; idempotent on `uid`. Without the module `anomaly`: 202 `{id: 0, created: false, dropped}`, nothing kept |
 | POST | `/api/v1/robot/routes` | Multipart `meta` (JSON with `uid`) and `route.csv` → 201 `{id}`; idempotent on `uid` |
 | GET | `/api/v1/robot/routes/{id}/file` | → the route CSV; 403 for a route of another robot |
+
+### GPS in telemetry
+
+A robot with a GNSS receiver may add `gps` to its `telemetry` messages:
+
+```json
+{"type": "telemetry", "ts": 1792113611.4, "pose": {"x": 41.2, "y": -6.8, "yaw": 0.12},
+ "gps": {"lat": -6.1997312, "lon": 106.8164705, "fix": "rtk_fixed", "hdop": 0.7}}
+```
+
+| Field | | |
+|---|---|---|
+| `lat`, `lon` | required | WGS84 degrees of the robot, ideally of the point its map pose describes (the base link) |
+| `fix` | optional | `none`, `gps`, `dgps`, `rtk_float` or `rtk_fixed`; `none` means no position: send it (or leave `gps` out) while there is no fix |
+| `hdop` | optional | Horizontal dilution of precision |
+
+On a `gps` deployment the dashboard places the robot at its GPS position when there is one, and
+otherwise at its map pose through the site georeference; the heading always comes from the pose
+`yaw`, so keep sending `pose`. The 5 s history keeps `lat` and `lon` for trails and track replay.
+Without `gps` nothing changes.
 
 ## Integration API
 

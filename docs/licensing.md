@@ -105,6 +105,11 @@ counts; `edition` and `tier` are labels for the dashboard. A license whose `prod
 Without `map` the edition decides: `mall` floorplan, `substation` gps, `custom` floorplan. The map
 mode stays after the license expires, so the maps already drawn keep working.
 
+The backend enforces it: floor plan uploads exist only in `floorplan`, robot map uploads only in
+`pgm`, the site georeference only in `gps`, and other modes answer
+`409 {"error": "this deployment uses <mode> maps"}` ([api.md](api.md#map-modes)). Plans already
+uploaded stay viewable and assignable when a new license changes the mode.
+
 ## Installation ID and activation
 
 Every server makes an installation ID at its first start, such as `NETRA-7KQ3-M9XD-2WPA`, kept in

@@ -134,7 +134,8 @@ it once per anomaly.
 * `GET /routes?robot_id=&archived=`, `GET /routes/{id}` with `points` (`x`, `y`, `yaw_deg`, `dwell_s`).
 * `GET /floor-plans` with calibration, `GET /floor-plans/{id}/file`. A map position becomes a plan
   pixel with `px = origin_x_px + s·(cos θ·x + sin θ·y)`, `py = origin_y_px + s·(sin θ·x − cos θ·y)`,
-  `s = px_per_m`, `θ = rotation_rad`.
+  `s = px_per_m`, `θ = rotation_rad`. A plan of `kind` `pgm` is the robot's own map rendered to PNG,
+  with the `resolution` and `origin` of its `map.yaml`.
 * `GET /categories`: categories and labels.
 
 Lists without a cursor answer `{"data": [...]}`. New fields may be added to any object; ignore the
