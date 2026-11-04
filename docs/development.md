@@ -67,9 +67,10 @@ fake store.
 | [`internal/api/maps_test.go`](../internal/api/maps_test.go) | Map mode gating of uploads and the georeference with test licenses, basemap and control point validation, robot map upload refusals, overlay bounds, GPS in telemetry |
 | [`internal/api/robotcontrol_test.go`](../internal/api/robotcontrol_test.go) | `set_inspection` and `set_people`: ack, refusal, timeout, validation |
 | [`internal/api/route_test.go`](../internal/api/route_test.go) | Route CSV parsing |
-| [`internal/auth/auth_test.go`](../internal/auth/auth_test.go) | Password hashes, token digests |
-| [`internal/geo/geo_test.go`](../internal/geo/geo_test.go) | Transform round trip and ground distances, least-squares fit recovering a known rotation, scale and translation, residuals, one point with a heading, degenerate input, the antimeridian |
+| [`internal/auth/auth_test.go`](../internal/auth/auth_test.go) | Password hashes, token digests, PBKDF2 key derivation vectors |
 | [`internal/ext/ext_test.go`](../internal/ext/ext_test.go) | Token endpoint, lockout, scopes, rate limit, change feed and cursor, photos, routes, OpenAPI and Swagger UI |
+| [`internal/geo/geo_test.go`](../internal/geo/geo_test.go) | Transform round trip and ground distances, least-squares fit recovering a known rotation, scale and translation, residuals, one point with a heading, degenerate input, the antimeridian |
+| [`internal/licensemgr`](../internal/licensemgr/) | License manager: file store round trips, modes and schema check, folder lock, audit tail; key encryption, wrong passphrase, tampering, idle lock; building and validating licenses; HTTP login, CSRF, throttling, and the issue, renew, change and verify flows against `license.Verify` |
 | [`internal/report/pdf_test.go`](../internal/report/pdf_test.go), [`xlsx_test.go`](../internal/report/xlsx_test.go) | PDF and XLSX output |
 | [`internal/rosmap/rosmap_test.go`](../internal/rosmap/rosmap_test.go) | `map.yaml` parsing (nav2 and ROS 1 forms, errors with lines), PGM P5 8/16-bit and P2, PNG, occupancy with negate and the three modes, rendering, the calibration putting map cells on their pixels |
 | [`internal/scheduler/scheduler_test.go`](../internal/scheduler/scheduler_test.go) | `Due` for weekly, one-off and disabled schedules |
@@ -89,6 +90,23 @@ make lint   # go vet, golangci-lint run, ruff check and ruff format --check in a
 5 minutes. CI pins v1.61; use a v1 release locally, v2 refuses this file. Ruff is configured in
 [`ai/pyproject.toml`](../ai/pyproject.toml): line length 110, target Python 3.11, rules `E`, `F`,
 `I`, `B`, `UP`, `SIM`, `D` without `D100`, `D104`, `D203`, `D213`.
+
+## The single application
+
+`netra` is the service with the dashboard inside, as the installers ship it:
+
+```bash
+cd ../netra-fleet-fe && npm run build                     # the export in out/
+cd ../netra-fleet-be && rm -rf internal/web/dist && cp -r ../netra-fleet-fe/out internal/web/dist
+go build -tags webui -o bin/netra ./cmd/netra
+NETRA_PG_BIN=/usr/lib/postgresql/16/bin NETRA_DATA_DIR=/tmp/netra bin/netra serve   # not as root
+```
+
+Open <http://localhost:8080>: a new installation opens the setup wizard. `internal/web/dist` is
+ignored by git. Without `-tags webui`, the binary serves only the API (or `NETRA_WEB_DIR`).
+
+The private-database test needs PostgreSQL binaries and a regular user:
+`NETRA_TEST_PG_BIN=/usr/lib/postgresql/16/bin go test ./internal/pgmanaged`.
 
 ## End-to-end smoke test
 

@@ -10,7 +10,7 @@ the [Netra](https://github.com/DarmawanWeb/Netra) repository.
 
 | Component | Source | Role |
 |---|---|---|
-| `netra-api` | this repository: [`cmd/netra-api`](../cmd/netra-api/main.go), `internal/` | Dashboard REST and WebSocket API, robot gateway, anomaly pipeline, scheduler, reports, integration API, metrics |
+| `netra` / `netra-api` | this repository: [`cmd/netra`](../cmd/netra/main.go) (installers), [`cmd/netra-api`](../cmd/netra-api/main.go) (Docker), [`internal/app`](../internal/app/app.go) | One service: dashboard REST and WebSocket API, the dashboard itself (when built in), robot gateway, anomaly pipeline with built-in Ollama detection, scheduler, reports, integration API, backups, metrics |
 | `netra-ai` | this repository: [`ai/`](../ai/netra_ai/main.py) | Final anomaly detection with a vision-language model on Ollama ([AI service](ai-service.md)) |
 | PostgreSQL / TimescaleDB | deployment | All state; `netra-api` applies its own migrations ([database](database.md)) |
 | `NETRA_DATA_DIR` | `netra-api` volume | Anomaly photos, floor-plan files, rendered robot maps and the site overlay |
@@ -52,20 +52,45 @@ flowchart LR
 
 ### Process layout
 
-[`cmd/netra-api/main.go`](../cmd/netra-api/main.go) wires the process:
+`app.Serve` ([`internal/app/app.go`](../internal/app/app.go)) wires the process; `netra serve`
+and `netra-api` both call it:
 
-1. `config.Load` reads the environment ([configuration](configuration.md)).
-2. `store.Open` connects to PostgreSQL, retrying once a second for about 30 s, and applies the
-   embedded migrations.
+1. `config.Load` reads the environment ([configuration](configuration.md)); `netra` first reads
+   an environment file (`-config`, `NETRA_CONFIG`, `netra.env` next to the program, or the
+   system's).
+2. The database: with `NETRA_PG_BIN`, the installation's private PostgreSQL
+   ([`pgmanaged`](../internal/pgmanaged/pgmanaged.go)) is created on first use in
+   `NETRA_DATA_DIR/pgdata` and started on 127.0.0.1:`NETRA_PG_PORT`, and stopped with the
+   service; otherwise `NETRA_DATABASE_URL`. `store.Open` retries for about 30 s and applies the
+   embedded migrations under an advisory lock.
 3. If `NETRA_ADMIN_PASSWORD` is set, the user `NETRA_ADMIN_USER` is created or updated with that
-   password and the `admin` role (on every start).
-4. The final detector is `detect.HTTP` (calls `netra-ai`) when `NETRA_FINAL_DETECTOR_URL` is set,
-   else `detect.PassThrough`, which returns the robot's own result.
-5. `api.New` builds the server with the WebSocket hub, the Telegram notifier and the NATS
-   publisher. Two goroutines start: the anomaly pipeline (`Server.RunPipeline`) and the scheduler
-   (`scheduler.Run`).
-6. The HTTP server listens on `NETRA_ADDR` (`ReadHeaderTimeout` 10 s, no read or write timeout).
-   SIGINT or SIGTERM shuts it down with a 10 s grace period.
+   password and the `admin` role (on every start). Without it a new installation opens the
+   first-run setup.
+4. The license: the installation ID is made at the first start, then the newest valid license of
+   the file, `NETRA_LICENSE` and the upload applies ([licensing](licensing.md)).
+5. The final detector: `detect.HTTP` (an external service such as `netra-ai`) when
+   `NETRA_FINAL_DETECTOR_URL` is set, else the built-in `detect.Ollama` when `NETRA_OLLAMA_URL` is
+   set, else `detect.PassThrough`, which returns the robot's own result. Either model needs the
+   module `ai.final`.
+6. `api.New` builds the server with the WebSocket hub, the Telegram notifier and the NATS
+   publisher. Goroutines start: the anomaly pipeline, the scheduler and, when `pg_dump` is found
+   and `NETRA_BACKUP_KEEP_DAYS` > 0, the daily backup.
+7. The dashboard: the export built into the binary (`-tags webui`) or `NETRA_WEB_DIR` is served
+   for every path no API route takes ([`web`](../internal/web/web.go)).
+8. The HTTP server listens on `NETRA_ADDR` (`ReadHeaderTimeout` 10 s), with HTTPS when a
+   certificate is configured or `NETRA_TLS=self-signed` ([`tlsutil`](../internal/tlsutil/tlsutil.go)).
+   SIGINT or SIGTERM shuts it down with a 10 s grace period, then stops the private PostgreSQL.
+
+### Serving the dashboard
+
+The dashboard is a static export (netra-fleet-fe `out/`). The web handler answers the path, then
+`<path>.html`, then `<path>/index.html`, then the one exported page of a detail route
+(`/anomalies/12` and its payload `/anomalies/12.txt` from `anomalies/0.html` and `0.txt`, the same
+for patrols and robots), else `404.html` with 404. `/` redirects to `/dashboard`; unknown `/api/`
+paths get a JSON 404. Hashed assets under `/_next/static/` are cached for a year, pages revalidate
+by ETag. Every page carries a Content-Security-Policy (same-origin scripts, styles and
+connections, the WebSocket to the same host, images also from data URLs and map tiles),
+`X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: same-origin`.
 
 Live state is held in process memory: WebSocket connections, commands waiting for an ack, robot
 clock offsets, the telemetry sampling clock, the login throttle and the integration rate limits.
@@ -78,6 +103,15 @@ same `netra-api` process.
 |---|---|---|
 | `cmd/netra-api` | Entry point: wiring, license loading, background goroutines, graceful shutdown | [`main.go`](../cmd/netra-api/main.go) |
 | `cmd/netra-license` | Vendor tool: signing key, issuing and inspecting licenses | [`main.go`](../cmd/netra-license/main.go) |
+| `cmd/netra-license-manager`, `internal/licensemgr` | Vendor web tool, not part of netra-api: clients and deployments, the encrypted signing key, issuing, renewing and verifying licenses, audit log, embedded UI ([license manager](license-manager.md)) | [`main.go`](../cmd/netra-license-manager/main.go), [`store.go`](../internal/licensemgr/store.go), [`key.go`](../internal/licensemgr/key.go), [`issue.go`](../internal/licensemgr/issue.go), [`server.go`](../internal/licensemgr/server.go), `ui/` |
+| `cmd/netra` | The installed application: `serve` and the maintenance commands (`installation-id`, `reset-password`, `backup`, `restore`, `license`, `version`) | [`main.go`](../cmd/netra/main.go) |
+| `internal/app` | The service as one process: database, license, API, dashboard, pipeline, scheduler, backups, TLS | [`app.go`](../internal/app/app.go) |
+| `internal/web` | Serves the dashboard export, built in (`webui` tag) or from a directory | [`web.go`](../internal/web/web.go) |
+| `internal/pgmanaged` | The installation's private PostgreSQL: initdb, start, stop | [`pgmanaged.go`](../internal/pgmanaged/pgmanaged.go) |
+| `internal/backup` | Daily `pg_dump` backups with retention, listing, the commands for dump and restore | [`backup.go`](../internal/backup/backup.go) |
+| `internal/tlsutil` | Self-signed certificate for HTTPS on a local network | [`tlsutil.go`](../internal/tlsutil/tlsutil.go) |
+| `internal/sysinfo` | Disk space and data size for the system page | [`sysinfo.go`](../internal/sysinfo/sysinfo.go) |
+| `internal/version` | Build version, set by the release build | [`version.go`](../internal/version/version.go) |
 | `internal/api` | Dashboard REST API and live feed, robot gateway (WebSocket, uploads), commands and acks, clock-skew correction, anomaly pipeline, patrol start, report endpoints, users and sessions, audit, integration-client admin, map modes (robot maps, site georeference) | [`server.go`](../internal/api/server.go) (routes, middleware, helpers), [`dashboard.go`](../internal/api/dashboard.go), [`robot.go`](../internal/api/robot.go), [`robotcontrol.go`](../internal/api/robotcontrol.go), [`clock.go`](../internal/api/clock.go), [`pipeline.go`](../internal/api/pipeline.go), [`reports.go`](../internal/api/reports.go), [`users.go`](../internal/api/users.go), [`clients.go`](../internal/api/clients.go), [`maps.go`](../internal/api/maps.go) |
 | `internal/auth` | PBKDF2-SHA256 password hashes, random tokens and their SHA-256 digests, roles and permissions | [`auth.go`](../internal/auth/auth.go), [`rbac.go`](../internal/auth/rbac.go) |
 | `internal/bus` | Publish-only NATS client over the core text protocol, reconnects lazily | [`nats.go`](../internal/bus/nats.go) |

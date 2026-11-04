@@ -9,6 +9,7 @@ the patrol command center for Pashupati robots.
 | [Dashboard API](api.md) | Every `/api/v1` route with its permission, authentication, errors, the live WebSocket feed, robot endpoints |
 | [Database](database.md) | How migrations are applied, each migration in order, table overview, files outside the database |
 | [Licensing](licensing.md) | Editions, tiers and feature modules, the signed license, the signing key, issuing and installing licenses, expiry and the robot limit |
+| [License manager](license-manager.md) | EZRA's web tool to issue licenses (vendor only): running it, the first start, the encrypted signing key, the activation flow, backups, its API |
 | [Configuration](configuration.md) | Environment variables of `netra-api`, `netra-ai` and the smoke test |
 | [Development](development.md) | Local setup, tests, lint, smoke test, CI, git hooks, commit convention, adding endpoints and migrations, releases |
 | [AI service](ai-service.md) | The `netra-ai` final-detection service: endpoints, prompt and answer handling, metrics, tests, image |

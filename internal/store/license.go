@@ -24,6 +24,13 @@ func (s *Store) SaveLicense(ctx context.Context, text, username string) error {
 	return err
 }
 
+// DatabaseSize returns the size of the database in bytes.
+func (s *Store) DatabaseSize(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx, `SELECT pg_database_size(current_database())`).Scan(&n)
+	return n, err
+}
+
 // CountRobots returns the number of registered robots.
 func (s *Store) CountRobots(ctx context.Context) (int, error) {
 	var n int

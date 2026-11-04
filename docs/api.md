@@ -85,6 +85,7 @@ file missing on disk gets a plain-text 404.
 | Method | Path | Permission | What it does |
 |---|---|---|---|
 | GET | `/healthz` | none | `{"status": "ok"}` while the process serves HTTP (no database check) |
+| GET | `/readyz` | none | `{"status": "ready", "version"}` when the database answers too, else 503 |
 | GET | `/api/v1/info` | view | → `{public_url, time_zone, version, installation_id, edition, tier, features, map_mode, robot_limit, license, branding}`: `NETRA_PUBLIC_URL` (the address robots connect to), `NETRA_TZ`, the build version, this server's installation ID, the licensed modules in force, the map mode (`floorplan`, `pgm` or `gps`), the robot limit (0: none) and the license and branding as below |
 | GET | `/api/v1/setup` | none | → `{required, installation_id, version, license}`: `required` while no user exists (a new installation); the dashboard then opens the setup wizard |
 | POST | `/api/v1/setup` | none | Only while `required`. `{username, display_name, password, license}` (`license` optional) → 201 like a login, plus `license`: creates the first administrator, installs the license; 400 for a bad username, password or license (nothing is created), 409 once a user exists |
@@ -92,6 +93,14 @@ file missing on disk gets a plain-text 404.
 | GET | `/api/v1/branding/logo` | none | The logo of the license (SVG or PNG), `ETag`, cached 5 minutes; 404 without one |
 | GET | `/metrics` | none | Prometheus text format ([metrics](architecture.md#metrics)) |
 | GET | `/api/v1/ws` | view | Live WebSocket feed, see [below](#live-websocket-feed) |
+
+### System
+
+| Method | Path | Permission | What it does |
+|---|---|---|---|
+| GET | `/api/v1/system` | users | → `{version, installation_id, started_at, uptime_s, time_zone, tls, database: {size_bytes, managed}, disk: {path, data_bytes, data_files, data_complete, free_bytes, total_bytes}, backups: {enabled, keep_days, at, dir, list}, robots: {registered, online}, license, map_mode}`; `list` is `{name, size, created}` newest first; the data size is cached for 5 minutes |
+| POST | `/api/v1/system/backups` | users | Makes a database backup now → 201 `{name, size, created}`; 409 when built-in backups are off |
+| GET | `/api/v1/system/backups/{name}` | users | Downloads a backup (`netra-YYYYMMDD-HHMMSS.dump`); 404 for any other name |
 
 ### License
 

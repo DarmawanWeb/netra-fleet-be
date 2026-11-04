@@ -34,7 +34,8 @@ in its [robot API](https://github.com/DarmawanRobotics/Pashupati/blob/main/src/r
 
 One image for every client: a signed license decides the edition (mall, substation), the tier
 (basic, pro, enterprise), the modules, the robot limit and the branding
-([licensing](docs/licensing.md)). The core runs without one.
+([licensing](docs/licensing.md)). The core runs without one. EZRA issues licenses with the
+[license manager](docs/license-manager.md), a vendor-only web tool.
 
 **Robots**
 - A token per robot, live state over WebSocket, telemetry history (5 s samples) for track replay
@@ -122,6 +123,7 @@ instead ([INTEGRATION.md](INTEGRATION.md)).
 | [Dashboard API](docs/api.md) | Every `/api/v1` route with its permission, authentication, errors, the live WebSocket, robot endpoints |
 | [Database](docs/database.md) | How migrations are applied, each migration in order, the tables |
 | [Licensing](docs/licensing.md) | Editions, tiers and modules, the signed license, issuing and installing one |
+| [License manager](docs/license-manager.md) | EZRA's web tool to issue, renew and check licenses for clients and their deployments (vendor only) |
 | [Configuration](docs/configuration.md) | Environment variables of `netra-api`, `netra-ai` and the smoke test |
 | [Development](docs/development.md) | Local setup, tests, lint, smoke test, CI, hooks, adding endpoints and migrations, releases |
 | [AI service](docs/ai-service.md) | `netra-ai`: endpoints, prompt and answer handling, metrics, tests, image |
@@ -132,6 +134,7 @@ instead ([INTEGRATION.md](INTEGRATION.md)).
 ```bash
 cp .env.example .env && set -a && . ./.env && set +a
 make run                 # API on :8080 (PostgreSQL required; migrations run at start)
+make netra               # the single application with the dashboard inside (bin/netra)
 cd ai && pip install -e ".[dev]" && uvicorn netra_ai.main:app --port 8090
 make test ai-test lint   # unit tests, ruff, golangci-lint
 make smoke               # end-to-end against a running API

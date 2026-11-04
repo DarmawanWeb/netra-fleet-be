@@ -118,7 +118,8 @@ the database (`settings`). The setup wizard and Settings > License show it. A li
 
 1. The client installs NETRA and reads the installation ID in the setup wizard.
 2. The client sends it to EZRA Robotics.
-3. EZRA issues the license with `-installation <ID>` and sends the file.
+3. EZRA issues the license for that installation (in the [license manager](license-manager.md),
+   or `netra-license issue -installation <ID>`) and sends the file.
 4. The client installs it in the wizard or in Settings > License. No internet is needed.
 
 The ID is in the database, so a restored backup keeps it; a fresh database is a new installation
@@ -145,6 +146,11 @@ Until a `.pub` is committed, `netra-api` trusts no key and every deployment runs
 the log says `license: no trusted key built in`.
 
 ## Issuing a license
+
+EZRA issues client licenses with the [license manager](license-manager.md): a local web tool that
+keeps the clients and their deployments, the signing key encrypted with a passphrase, every license
+issued (renewals and changes included) and an audit log. `netra-license issue` does the same from a
+terminal, for scripts and CI:
 
 ```bash
 go run ./cmd/netra-license issue -key ~/netra-keys/ezra.key \

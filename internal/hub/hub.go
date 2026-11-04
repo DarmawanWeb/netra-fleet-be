@@ -105,6 +105,13 @@ func (h *Hub) Online(id string) bool {
 	return ok
 }
 
+// OnlineCount is the number of connected robots.
+func (h *Hub) OnlineCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.robots)
+}
+
 // SendRobot sends a JSON message to a robot.
 func (h *Hub) SendRobot(id string, msg any) error {
 	h.mu.RLock()
