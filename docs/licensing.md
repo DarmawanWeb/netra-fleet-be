@@ -143,6 +143,15 @@ Either:
 At start the newest valid license of the three sources (by `issued_at`) applies. An upload older
 than the current license is refused (409), so an old file cannot replace a renewal.
 
+## What a license does not stop
+
+- A license is not bound to a machine: the same file works on any server. Issue one license per
+  deployment (the client and ID are shown in Settings > License) and give short validity to
+  trial licenses.
+- Expiry follows the server's clock, so setting the clock back delays it.
+- Whoever can build `netra-api` from source can remove the check. The license protects the images
+  delivered to clients, not the source code.
+
 ## Renewing or upgrading
 
 Issue a new license (a new `issued_at`) with the new expiry, tier or modules and install it the
