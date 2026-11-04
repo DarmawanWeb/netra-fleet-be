@@ -22,6 +22,7 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/notify"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/scheduler"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/version"
 )
 
 func main() {
@@ -48,7 +49,7 @@ func main() {
 	}
 	lic, err := loadLicense(ctx, cfg, st)
 	if err != nil {
-		slog.Error("license keys", "err", err)
+		slog.Error("license", "err", err)
 		os.Exit(1)
 	}
 	srv := api.New(cfg, st, hub.New(), notify.NewTelegram(cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPI), det,
@@ -63,7 +64,8 @@ func main() {
 		defer cancel()
 		_ = httpServer.Shutdown(shutdown)
 	}()
-	slog.Info("netra-api listening", "addr", cfg.Addr, "tz", cfg.TimeZone.String())
+	slog.Info("netra-api listening", "addr", cfg.Addr, "tz", cfg.TimeZone.String(), "version", version.String(),
+		"installation", lic.Installation())
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("http", "err", err)
 		os.Exit(1)
@@ -77,7 +79,11 @@ func loadLicense(ctx context.Context, cfg config.Config, st *store.Store) (*lice
 	if err != nil {
 		return nil, err
 	}
-	lic := license.NewState(keys)
+	installation, err := st.EnsureSetting(ctx, store.SettingInstallation, license.NewInstallationID())
+	if err != nil {
+		return nil, err
+	}
+	lic := license.NewState(keys, installation)
 	var cands []license.Candidate
 	if cfg.LicenseFile != "" {
 		raw, err := os.ReadFile(cfg.LicenseFile)
@@ -102,8 +108,8 @@ func loadLicense(ctx context.Context, cfg config.Config, st *store.Store) (*lice
 		slog.Warn("license: none valid, running the core only", "status", info.Status, "err", info.Error)
 	default:
 		slog.Info("license", "id", info.ID, "client", info.Client, "edition", info.Edition, "tier", info.Tier,
-			"status", info.Status, "features", info.Features, "max_robots", info.MaxRobots,
-			"expires", info.ExpiresAt, "source", info.Source)
+			"status", info.Status, "features", info.Features, "map", info.Map, "max_robots", info.MaxRobots,
+			"expires", info.ExpiresAt, "source", info.Source, "bound", info.Installation != "")
 		if info.ExpiresAt != nil && time.Until(*info.ExpiresAt) < 30*24*time.Hour {
 			slog.Warn("license expires soon", "expires", info.ExpiresAt, "grace_ends", info.GraceEnds)
 		}

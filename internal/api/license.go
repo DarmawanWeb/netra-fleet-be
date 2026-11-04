@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/version"
 )
 
 // unlicensedRobots is how many robots a deployment without a valid license may register: enough
@@ -118,12 +119,14 @@ func (s *Server) getLicense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"license":     s.lic.Info(),
-		"catalog":     license.Catalog,
-		"editions":    license.Editions,
-		"tiers":       license.Tiers,
-		"robots":      robots,
-		"robot_limit": s.robotLimit(),
+		"installation_id": s.lic.Installation(),
+		"map_modes":       license.MapModes,
+		"license":         s.lic.Info(),
+		"catalog":         license.Catalog,
+		"editions":        license.Editions,
+		"tiers":           license.Tiers,
+		"robots":          robots,
+		"robot_limit":     s.robotLimit(),
 	})
 }
 
@@ -162,23 +165,27 @@ func (s *Server) putLicense(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.lic.Info())
 }
 
-// infoView is GET /api/v1/info: how robots reach this server, and what the license includes.
+// infoView is GET /api/v1/info: how robots reach this server, what the license includes and
+// which map the deployment uses.
 type infoView struct {
-	PublicURL  string       `json:"public_url"`
-	TimeZone   string       `json:"time_zone"`
-	Edition    string       `json:"edition"`
-	Tier       string       `json:"tier"`
-	Features   []string     `json:"features"`
-	RobotLimit int          `json:"robot_limit"`
-	License    license.Info `json:"license"`
-	Branding   brandingView `json:"branding"`
+	PublicURL      string       `json:"public_url"`
+	TimeZone       string       `json:"time_zone"`
+	Version        string       `json:"version"`
+	InstallationID string       `json:"installation_id"`
+	Edition        string       `json:"edition"`
+	Tier           string       `json:"tier"`
+	Features       []string     `json:"features"`
+	MapMode        string       `json:"map_mode"`
+	RobotLimit     int          `json:"robot_limit"`
+	License        license.Info `json:"license"`
+	Branding       brandingView `json:"branding"`
 }
 
 func (s *Server) infoView() infoView {
 	info := s.lic.Info()
 	return infoView{
-		PublicURL: s.cfg.PublicURL, TimeZone: s.cfg.TimeZone.String(),
-		Edition: info.Edition, Tier: info.Tier, Features: info.Features, RobotLimit: s.robotLimit(),
-		License: info, Branding: s.brandingView(),
+		PublicURL: s.cfg.PublicURL, TimeZone: s.cfg.TimeZone.String(), Version: version.String(),
+		InstallationID: s.lic.Installation(), Edition: info.Edition, Tier: info.Tier, Features: info.Features,
+		MapMode: s.lic.MapMode(), RobotLimit: s.robotLimit(), License: info, Branding: s.brandingView(),
 	}
 }

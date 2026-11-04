@@ -76,6 +76,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 
+	mux.HandleFunc("GET /api/v1/setup", s.setupState)
+	mux.HandleFunc("POST /api/v1/setup", s.setup)
 	mux.HandleFunc("GET /api/v1/branding", s.branding)
 	mux.HandleFunc("GET /api/v1/branding/logo", s.brandingLogo)
 
