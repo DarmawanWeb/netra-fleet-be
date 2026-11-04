@@ -364,7 +364,7 @@ func (s *Server) putGeo(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.hub.Broadcast(map[string]any{"type": "geo"})
+	s.relay.Broadcast(map[string]any{"type": "geo"})
 	s.writeGeo(w, r)
 }
 
@@ -487,7 +487,7 @@ func (s *Server) uploadGeoOverlay(w http.ResponseWriter, r *http.Request) {
 	if old != "" {
 		_ = os.Remove(old)
 	}
-	s.hub.Broadcast(map[string]any{"type": "geo"})
+	s.relay.Broadcast(map[string]any{"type": "geo"})
 	s.writeGeo(w, r)
 }
 
@@ -517,6 +517,6 @@ func (s *Server) deleteGeoOverlay(w http.ResponseWriter, r *http.Request) {
 	if old != "" {
 		_ = os.Remove(old)
 	}
-	s.hub.Broadcast(map[string]any{"type": "geo"})
+	s.relay.Broadcast(map[string]any{"type": "geo"})
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -52,3 +52,21 @@ func TestRobotTimeWithoutTelemetryOrTimestamp(t *testing.T) {
 		t.Fatal("telemetry without a timestamp recorded a skew")
 	}
 }
+
+func TestNoteClockReportsNewOffsets(t *testing.T) {
+	s := newClockServer()
+	now := time.Now()
+	if !s.noteClock("l1w-01", unix(now), now) {
+		t.Fatal("first offset not reported")
+	}
+	later := now.Add(time.Second)
+	if s.noteClock("l1w-01", unix(later), later.Add(300*time.Millisecond)) {
+		t.Fatal("latency jitter reported as a new offset")
+	}
+	if !s.noteClock("l1w-01", unix(later.Add(-2*time.Hour)), later) {
+		t.Fatal("a clock jump not reported")
+	}
+	if s.noteClock("l1w-01", 0, later) {
+		t.Fatal("telemetry without ts reported")
+	}
+}

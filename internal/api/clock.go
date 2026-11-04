@@ -14,14 +14,18 @@ import (
 // clockSkewMin is the offset below which robot timestamps are used as they are.
 const clockSkewMin = 2 * time.Second
 
-// noteClock records the offset of the robot clock from a telemetry timestamp (Unix seconds).
-func (s *Server) noteClock(robotID string, ts float64, now time.Time) {
+// noteClock records the offset of the robot clock from a telemetry timestamp (Unix seconds). It
+// reports whether the offset is new or moved by more than a second.
+func (s *Server) noteClock(robotID string, ts float64, now time.Time) bool {
 	if ts <= 0 || math.IsNaN(ts) || math.IsInf(ts, 0) {
-		return
+		return false
 	}
+	skew := now.Sub(unixTime(ts))
 	s.mu.Lock()
-	s.skew[robotID] = now.Sub(unixTime(ts))
+	old, known := s.skew[robotID]
+	s.skew[robotID] = skew
 	s.mu.Unlock()
+	return !known || (skew-old).Abs() > time.Second
 }
 
 // robotTime converts a robot timestamp to server time; a missing timestamp means now.
@@ -39,11 +43,19 @@ func (s *Server) robotTime(robotID string, ts float64) time.Time {
 	return t
 }
 
-// clockSkew returns the measured offset in seconds (positive: robot behind), or nil if unknown.
-func (s *Server) clockSkew(robotID string) *float64 {
+// offset is the measured offset of a robot clock (positive: robot behind).
+func (s *Server) offset(robotID string) (time.Duration, bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	skew, known := s.skew[robotID]
-	s.mu.Unlock()
+	return skew, known
+}
+
+// clockSkew returns the measured offset in seconds (positive: robot behind), or nil if unknown.
+func (s *Server) clockSkew(robotID string) *float64 { return skewSeconds(s.offset(robotID)) }
+
+// skewSeconds rounds an offset to a tenth of a second for the dashboard, nil when unknown.
+func skewSeconds(skew time.Duration, known bool) *float64 {
 	if !known {
 		return nil
 	}

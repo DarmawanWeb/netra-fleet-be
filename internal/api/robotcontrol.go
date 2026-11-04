@@ -1,46 +1,31 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"slices"
 	"time"
+
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 )
 
 // ackTimeout is how long a control request waits for the robot's ack.
 var ackTimeout = 10 * time.Second
 
-type ackResult struct {
-	OK  bool   `json:"ok"`
-	Msg string `json:"msg"`
-}
-
 var errAckTimeout = errors.New("the robot did not answer within 10 s")
 
 // commandAndWait sends a command and blocks until the robot acks it or the timeout passes.
-func (s *Server) commandAndWait(robotID, name string, args map[string]any) (ackResult, error) {
-	done := make(chan ackResult, 1)
-	id := fmt.Sprintf("%s-%d", name, time.Now().UnixNano())
-	s.mu.Lock()
-	s.pending[id] = pendingCommand{name: name, done: done}
-	s.mu.Unlock()
-	if err := s.hub.SendRobot(robotID, map[string]any{"type": "command", "id": id, "name": name, "args": args}); err != nil {
-		s.mu.Lock()
-		delete(s.pending, id)
-		s.mu.Unlock()
-		return ackResult{}, err
+func (s *Server) commandAndWait(robotID, name string, args map[string]any) (relay.Ack, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), ackTimeout)
+	defer cancel()
+	res, err := s.relay.Command(ctx, robotID, relay.Command{ID: commandID(name), Name: name, Args: args, Wait: true})
+	if errors.Is(err, context.DeadlineExceeded) {
+		return relay.Ack{}, errAckTimeout
 	}
-	select {
-	case res := <-done:
-		return res, nil
-	case <-time.After(ackTimeout):
-		s.mu.Lock()
-		delete(s.pending, id)
-		s.mu.Unlock()
-		return ackResult{}, errAckTimeout
-	}
+	return res, err
 }
 
 // inspectionArgs checks a set_inspection request; at least one setting must be given.
@@ -69,7 +54,7 @@ func (s *Server) inspectionArgs(enabled *bool, model *string, interval *float64)
 }
 
 // replyAck answers a command the request waited for and audits it against target (the robot).
-func (s *Server) replyAck(w http.ResponseWriter, r *http.Request, action, target string, args map[string]any, res ackResult,
+func (s *Server) replyAck(w http.ResponseWriter, r *http.Request, action, target string, args map[string]any, res relay.Ack,
 	err error) {
 	robotID := target
 	detail := map[string]any{"args": args}

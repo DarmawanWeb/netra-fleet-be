@@ -21,6 +21,7 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/notify"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 	"github.com/gorilla/websocket"
 )
@@ -36,7 +37,8 @@ const (
 type Server struct {
 	cfg      config.Config
 	store    *store.Store
-	hub      *hub.Hub
+	hub      *hub.Hub    // the WebSockets of this process: dashboards (api), robots (gateway)
+	relay    relay.Relay // reaches the other roles: in this process, or over NATS
 	telegram *notify.Telegram
 	detector detect.Detector
 	bus      *bus.Publisher
@@ -57,13 +59,14 @@ type Server struct {
 type pendingCommand struct {
 	patrolID int64
 	name     string
-	done     chan ackResult // set when an HTTP request waits for the robot's answer
+	ack      func(relay.Ack) // set when the sender waits for the robot's answer
 }
 
-// New wires a server. lic decides the feature modules (nil: core only).
+// New wires a server. lic decides the feature modules (nil: core only). It relays between its
+// own parts until SetRelay gives it another relay.
 func New(cfg config.Config, st *store.Store, h *hub.Hub, tg *notify.Telegram, det detect.Detector, b *bus.Publisher,
 	lic *license.State) *Server {
-	return &Server{
+	s := &Server{
 		cfg: cfg, store: st, hub: h, telegram: tg, detector: det, bus: b, lic: lic, limiter: newLoginLimiter(),
 		lastLog:  map[string]time.Time{},
 		skew:     map[string]time.Duration{},
@@ -71,7 +74,23 @@ func New(cfg config.Config, st *store.Store, h *hub.Hub, tg *notify.Telegram, de
 		wake:     make(chan struct{}, 1),
 		pending:  map[string]pendingCommand{},
 	}
+	s.relay = relay.NewLocal(s.Handlers())
+	return s
 }
+
+// Handlers are this server's ends of the relay: its dashboards, its robots, its pipeline and
+// its alerts.
+func (s *Server) Handlers() relay.Handlers {
+	return relay.Handlers{
+		Dashboards: func(msg []byte) { s.hub.BroadcastRaw(msg) },
+		Gateway:    gateway{s},
+		Wake:       s.wakePipeline,
+		Alert:      s.runAlert,
+	}
+}
+
+// SetRelay makes the server reach the other roles through r.
+func (s *Server) SetRelay(r relay.Relay) { s.relay = r }
 
 // Handler returns the routed HTTP handler.
 func (s *Server) Handler() http.Handler {
@@ -214,7 +233,7 @@ func (s *Server) Handler() http.Handler {
 	module(license.Integration, auth.PermUsers, "DELETE /api/v1/api-clients/{id}", s.deleteClient)
 	if s.store != nil {
 		extMux := http.NewServeMux()
-		ext.New(s.cfg, s.store, s.hub.Online).Register(extMux)
+		ext.New(s.cfg, s.store, func(id string) bool { return s.relay.Online(id) }).Register(extMux)
 		mux.Handle("/api/ext/", s.feature(license.Integration, extMux))
 	}
 	mux.Handle("GET /metrics", metrics.Default)

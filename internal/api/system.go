@@ -59,8 +59,8 @@ func (s *Server) system(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	online := 0
-	if s.hub != nil {
-		online = s.hub.OnlineCount()
+	if s.relay != nil {
+		online = s.relay.OnlineCount()
 	}
 	dir, _ := filepath.Abs(s.rt.DataDir)
 	size, files, complete := s.sizes.get(dir)

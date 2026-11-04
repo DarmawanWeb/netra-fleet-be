@@ -80,8 +80,10 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	s.auditAs(body.Username, "setup", ip)
 	if body.License != "" {
 		if _, err := s.lic.Apply(body.License, "upload"); err == nil {
-			_ = s.store.SaveLicense(ctx, body.License, body.Username)
-			s.hub.Broadcast(map[string]any{"type": "license", "license": s.lic.Info()})
+			if err := s.store.SaveLicense(ctx, body.License, body.Username); err == nil {
+				s.relay.LicenseChanged()
+			}
+			s.relay.Broadcast(map[string]any{"type": "license", "license": s.lic.Info()})
 		}
 	}
 	token := auth.NewToken()
