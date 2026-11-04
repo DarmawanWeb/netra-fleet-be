@@ -6,7 +6,7 @@ const stat = (label, value, hint, tone = '', href = '') =>
     ? html`<a class="stat ${tone}" href="${href}"><div class="stat-label">${label}</div><div class="stat-value">${value}</div><div class="stat-hint">${hint}</div></a>`
     : html`<div class="stat ${tone}"><div class="stat-label">${label}</div><div class="stat-value">${value}</div><div class="stat-hint">${hint}</div></div>`;
 
-/** Callouts for a missing key or a key this build of netra-api does not trust. */
+/** Callouts for a missing key or a key this build of NETRA does not trust. */
 export function keyCallouts(k) {
   if (!k.exists) {
     return html`<div class="callout warn">${icon('key')}<div class="grow"><b>No signing key yet.</b>
@@ -15,8 +15,8 @@ export function keyCallouts(k) {
   }
   if (!k.trusted) {
     return html`<div class="callout warn">${icon('alert')}<div class="grow"><b>This build of NETRA does not trust the manager's key.</b>
-      <p>netra-api accepts only licenses signed by a key built into it. Add the public key as
-      <code>internal/license/keys/${k.file_name}</code> and release netra-api; until then its licenses are refused
+      <p>NETRA accepts only licenses signed by a key built into it. Add the public key as
+      <code>internal/license/keys/${k.file_name}</code> and release NETRA; until then its licenses are refused
       (${k.trusted_keys} key${k.trusted_keys === 1 ? '' : 's'} built into this build).</p></div>
       <a class="btn sm" href="#/key">Public key</a></div>`;
   }
@@ -89,7 +89,7 @@ export async function dashboardPage({ root, setTitle, current }) {
               ? html`<div class="keycard ${k.unlocked ? 'ok' : 'warn'}"><div class="glyph">${icon(k.unlocked ? 'unlock' : 'lock', 24)}</div>
                 <div class="grow"><h3>${k.unlocked ? 'Unlocked' : 'Locked'}</h3>
                 <p class="fingerprint">${k.fingerprint}</p>
-                <p>${k.trusted ? html`<span class="ok-text">Built into this build of netra-api</span>` : html`<span class="warn-text">Not built into this build</span>`}</p></div></div>`
+                <p>${k.trusted ? html`<span class="ok-text">Built into this build of NETRA</span>` : html`<span class="warn-text">Not built into this build</span>`}</p></div></div>`
               : empty('key', 'No key yet.', html`<a class="btn" href="#/key">Set up the key</a>`)
           }
         </section>

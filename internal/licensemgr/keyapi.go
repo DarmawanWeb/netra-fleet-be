@@ -22,7 +22,7 @@ type keyView struct {
 	Source      string     `json:"source,omitempty"`
 	CreatedAt   *time.Time `json:"created_at,omitempty"`
 	Iterations  int        `json:"iterations,omitempty"`
-	// Trusted: this build of netra-api accepts the manager's licenses (its key is built in).
+	// Trusted: this build of NETRA accepts the manager's licenses (its key is built in).
 	Trusted     bool   `json:"trusted"`
 	TrustedKeys int    `json:"trusted_keys"`
 	TrustError  string `json:"trust_error,omitempty"`

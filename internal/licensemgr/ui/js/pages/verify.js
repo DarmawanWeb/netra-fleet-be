@@ -8,13 +8,13 @@ function verdict(r) {
   if (r.error) return ['danger', 'x', 'Not a NETRA license', r.error];
   const m = r.manager.ok;
   const b = r.built_in.ok;
-  if (m && b) return ['ok', 'check', 'Genuine, and accepted by this build of netra-api', 'Signed by the manager’s key, which this build trusts.'];
-  if (m) return ['warn', 'alert', 'Signed by this manager, refused by this build', 'The manager’s key is not built into this build of netra-api.'];
-  if (b) return ['ok', 'check', 'Signed by a key built into netra-api', 'Not by the manager’s current key: an older or another EZRA key.'];
-  return ['danger', 'x', 'Not signed by a trusted key', 'The payload was changed after signing, or an unknown key signed it. netra-api refuses it.'];
+  if (m && b) return ['ok', 'check', 'Genuine, and accepted by this build of NETRA', 'Signed by the manager’s key, which this build trusts.'];
+  if (m) return ['warn', 'alert', 'Signed by this manager, refused by this build', 'The manager’s key is not built into this build of NETRA.'];
+  if (b) return ['ok', 'check', 'Signed by a key built into NETRA', 'Not by the manager’s current key: an older or another EZRA key.'];
+  return ['danger', 'x', 'Not signed by a trusted key', 'The payload was changed after signing, or an unknown key signed it. NETRA refuses it.'];
 }
 
-// Checks of what the payload says: neutral when no trusted key signed it (netra-api refuses it anyway).
+// Checks of what the payload says: neutral when no trusted key signed it (NETRA refuses it anyway).
 const claim = (signed, state) => (signed ? state : 'na');
 
 function statusLine(r, signed) {
@@ -25,7 +25,7 @@ function statusLine(r, signed) {
     return c(r.expiring ? 'warn' : 'ok', `Valid until ${longDate(l.expires_at)}`, relDays(l.expires_at));
   }
   if (r.status === 'grace') return c('warn', `Expired ${relDays(l.expires_at)}, in its grace period`, `Modules on until ${longDate(r.grace_ends)}`);
-  return c('bad', `Expired on ${longDate(l.expires_at)}`, 'netra-api runs the core only');
+  return c('bad', `Expired on ${longDate(l.expires_at)}`, 'NETRA runs the core only');
 }
 
 function installLine(r, signed) {
@@ -63,7 +63,7 @@ function resultHTML(r, meta) {
           ? check('ok', `Accepted by ${r.built_in.keys === 1 ? 'the key' : `one of the ${r.built_in.keys} keys`} built into this build`)
           : r.built_in.keys
             ? check('bad', `None of the ${r.built_in.keys} key${r.built_in.keys === 1 ? '' : 's'} built into this build signed it`)
-            : check('na', 'This build of netra-api has no key built in', 'Release builds carry internal/license/keys/*.pub')
+            : check('na', 'This build of NETRA has no key built in', 'Release builds carry internal/license/keys/*.pub')
       }
       ${statusLine(r, r.manager.ok || r.built_in.ok)}
       ${installLine(r, r.manager.ok || r.built_in.ok)}
@@ -93,7 +93,7 @@ export async function verifyPage({ root, setTitle, app }) {
   setTitle('Licenses', 'Verify');
   root.innerHTML = String(html`
     <div class="page-head"><div><h1>Verify a license</h1>
-      <p>Paste any NETRA license, from this manager or not. It is decoded and checked the way netra-api checks it.</p></div></div>
+      <p>Paste any NETRA license, from this manager or not. It is decoded and checked the way NETRA checks it.</p></div></div>
     <div class="grid cols-2">
       <section class="panel">
         <div class="panel-head"><h2>${icon('file', 15)} License text</h2>

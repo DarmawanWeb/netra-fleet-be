@@ -37,7 +37,7 @@ const DAY = 86400000;
 const HEX = /^#[0-9a-f]{6}$/i;
 const hex = (rgb) => '#' + rgb.map((v) => v.toString(16).padStart(2, '0')).join('');
 
-/** Reads a logo file into a data URL, refusing what netra-api would not serve. */
+/** Reads a logo file into a data URL, refusing what NETRA would not serve. */
 async function readLogo(file, max) {
   if (file.size > max) {
     throw fieldError('branding.logo', `The logo is ${Math.ceil(file.size / 1024)} KB; at most ${max / 1024} KB.`);

@@ -287,7 +287,7 @@ export async function licenseDetailPage(ctx) {
           <div class="panel-body"><textarea class="textblock" rows="5" readonly>${v.text}</textarea></div>
         </section>
         <section class="panel">
-          <div class="panel-head"><h2>${icon('info', 15)} Signed payload</h2><span class="muted small">what netra-api reads</span></div>
+          <div class="panel-head"><h2>${icon('info', 15)} Signed payload</h2><span class="muted small">what NETRA reads</span></div>
           <pre class="code">${prettyJSON(l)}</pre>
         </section>
       </div>
