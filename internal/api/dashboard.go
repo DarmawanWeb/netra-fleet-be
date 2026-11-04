@@ -59,9 +59,10 @@ func (s *Server) listRobots(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// info tells the dashboard how robots reach this command center (Settings, robot registration).
+// info tells the dashboard how robots reach this command center (Settings, robot registration)
+// and what the license includes (the pages it shows, the product's name and colours).
 func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"public_url": s.cfg.PublicURL, "time_zone": s.cfg.TimeZone.String()})
+	writeJSON(w, http.StatusOK, s.infoView())
 }
 
 func (s *Server) createRobot(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +73,18 @@ func (s *Server) createRobot(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Name == "" {
 		body.Name = body.ID
+	}
+	if limit := s.robotLimit(); limit > 0 {
+		n, err := s.store.CountRobots(r.Context())
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if n >= limit {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "robot limit of the license reached",
+				"robot_limit": limit})
+			return
+		}
 	}
 	token := auth.NewToken()
 	if err := s.store.CreateRobot(r.Context(), body.ID, body.Name, auth.HashToken(token)); err != nil {
