@@ -68,12 +68,18 @@ fake store.
 | [`internal/api/robotcontrol_test.go`](../internal/api/robotcontrol_test.go) | `set_inspection` and `set_people`: ack, refusal, timeout, validation |
 | [`internal/api/route_test.go`](../internal/api/route_test.go) | Route CSV parsing |
 | [`internal/auth/auth_test.go`](../internal/auth/auth_test.go) | Password hashes, token digests, PBKDF2 key derivation vectors |
+| [`internal/backup/backup_test.go`](../internal/backup/backup_test.go) | `pg_dump` called with the password in `PGPASSWORD`, not on the command line; retention pruning; listing; refused names |
+| [`internal/detect/ollama_test.go`](../internal/detect/ollama_test.go) | Built-in Ollama detection: answer normalisation, the prompt, downscaling, the request to a test Ollama, an unreachable model |
 | [`internal/ext/ext_test.go`](../internal/ext/ext_test.go) | Token endpoint, lockout, scopes, rate limit, change feed and cursor, photos, routes, OpenAPI and Swagger UI |
 | [`internal/geo/geo_test.go`](../internal/geo/geo_test.go) | Transform round trip and ground distances, least-squares fit recovering a known rotation, scale and translation, residuals, one point with a heading, degenerate input, the antimeridian |
 | [`internal/licensemgr`](../internal/licensemgr/) | License manager: file store round trips, modes and schema check, folder lock, audit tail; key encryption, wrong passphrase, tampering, idle lock; building and validating licenses; HTTP login, CSRF, throttling, and the issue, renew, change and verify flows against `license.Verify` |
+| [`internal/pgmanaged/pgmanaged_test.go`](../internal/pgmanaged/pgmanaged_test.go) | A real private cluster: create, start, reuse by a second process, stop, restart; refused as root. Needs `NETRA_TEST_PG_BIN` and a regular user, else skipped |
 | [`internal/report/pdf_test.go`](../internal/report/pdf_test.go), [`xlsx_test.go`](../internal/report/xlsx_test.go) | PDF and XLSX output |
 | [`internal/rosmap/rosmap_test.go`](../internal/rosmap/rosmap_test.go) | `map.yaml` parsing (nav2 and ROS 1 forms, errors with lines), PGM P5 8/16-bit and P2, PNG, occupancy with negate and the three modes, rendering, the calibration putting map cells on their pixels |
 | [`internal/scheduler/scheduler_test.go`](../internal/scheduler/scheduler_test.go) | `Due` for weekly, one-off and disabled schedules |
+| [`internal/sysinfo/sysinfo_test.go`](../internal/sysinfo/sysinfo_test.go) | Data size with a file limit, disk space |
+| [`internal/tlsutil/tlsutil_test.go`](../internal/tlsutil/tlsutil_test.go) | Self-signed certificate: names and addresses, key permissions, kept when it exists |
+| [`internal/web/web_test.go`](../internal/web/web_test.go) | Dashboard export routing (pages, detail fallback and payloads), the redirect of `/`, caching and security headers, JSON 404 for `/api/`, methods |
 | [`ai/tests/test_ai.py`](../ai/tests/test_ai.py) | Answer normalisation, prompt, `/detect` with a mocked Ollama, unreadable images |
 
 SQL queries, migrations and the complete robot flow are only exercised by the smoke test.
