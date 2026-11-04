@@ -85,7 +85,9 @@ file missing on disk gets a plain-text 404.
 | Method | Path | Permission | What it does |
 |---|---|---|---|
 | GET | `/healthz` | none | `{"status": "ok"}` while the process serves HTTP (no database check) |
-| GET | `/api/v1/info` | view | → `{public_url, time_zone, edition, tier, features, robot_limit, license, branding}`: `NETRA_PUBLIC_URL` (the address robots connect to), `NETRA_TZ`, the licensed modules in force, the robot limit (0: none) and the license and branding as below |
+| GET | `/api/v1/info` | view | → `{public_url, time_zone, version, installation_id, edition, tier, features, map_mode, robot_limit, license, branding}`: `NETRA_PUBLIC_URL` (the address robots connect to), `NETRA_TZ`, the build version, this server's installation ID, the licensed modules in force, the map mode (`floorplan`, `pgm` or `gps`), the robot limit (0: none) and the license and branding as below |
+| GET | `/api/v1/setup` | none | → `{required, installation_id, version, license}`: `required` while no user exists (a new installation); the dashboard then opens the setup wizard |
+| POST | `/api/v1/setup` | none | Only while `required`. `{username, display_name, password, license}` (`license` optional) → 201 like a login, plus `license`: creates the first administrator, installs the license; 400 for a bad username, password or license (nothing is created), 409 once a user exists |
 | GET | `/api/v1/branding` | none | → `{name, color, color_dark, logo}` from the license (`name` `NETRA` without one); `logo` is the URL of the logo or absent. Public: the login page uses it |
 | GET | `/api/v1/branding/logo` | none | The logo of the license (SVG or PNG), `ETag`, cached 5 minutes; 404 without one |
 | GET | `/metrics` | none | Prometheus text format ([metrics](architecture.md#metrics)) |
@@ -95,7 +97,7 @@ file missing on disk gets a plain-text 404.
 
 | Method | Path | Permission | What it does |
 |---|---|---|---|
-| GET | `/api/v1/license` | users | → `{license, catalog, editions, tiers, robots, robot_limit}`: `license` is `{status, id, client, edition, tier, features, max_robots, issued_at, expires_at, grace_ends, source, error}` (`status` `missing`, `invalid`, `valid`, `grace` or `expired`; `features` empty unless `valid` or `grace`; `source` `file`, `env` or `upload`; `error` why the last license given was refused), `catalog` every module `{ID, Description}`, `robots` the number registered |
+| GET | `/api/v1/license` | users | → `{installation_id, map_modes, license, catalog, editions, tiers, robots, robot_limit}`: `license` is `{status, id, client, edition, tier, features, map, max_robots, installation, issued_at, expires_at, grace_ends, source, error}` (`installation` the server the license is bound to, absent when unbound) (`status` `missing`, `invalid`, `valid`, `grace` or `expired`; `features` empty unless `valid` or `grace`; `source` `file`, `env` or `upload`; `error` why the last license given was refused), `catalog` every module `{ID, Description}`, `robots` the number registered |
 | PUT | `/api/v1/license` | users | Body: the license text, or `{"license": "..."}`. Verifies and applies it at once, keeps it for the next start, broadcasts `{"type": "license"}` on the live feed → the new `license`; 400 when the signature or format is wrong, 409 when it was issued before the current license |
 
 ### Robots and control
