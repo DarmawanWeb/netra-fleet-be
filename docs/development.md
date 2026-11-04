@@ -66,9 +66,10 @@ fake store.
 | [`internal/api/command_test.go`](../internal/api/command_test.go) | Command names accepted by `POST /robots/{id}/command` |
 | [`internal/api/robotcontrol_test.go`](../internal/api/robotcontrol_test.go) | `set_inspection` and `set_people`: ack, refusal, timeout, validation |
 | [`internal/api/route_test.go`](../internal/api/route_test.go) | Route CSV parsing |
-| [`internal/auth/auth_test.go`](../internal/auth/auth_test.go) | Password hashes, token digests |
+| [`internal/auth/auth_test.go`](../internal/auth/auth_test.go) | Password hashes, token digests, PBKDF2 key derivation vectors |
 | [`internal/ext/ext_test.go`](../internal/ext/ext_test.go) | Token endpoint, lockout, scopes, rate limit, change feed and cursor, photos, routes, OpenAPI and Swagger UI |
 | [`internal/report/pdf_test.go`](../internal/report/pdf_test.go), [`xlsx_test.go`](../internal/report/xlsx_test.go) | PDF and XLSX output |
+| [`internal/licensemgr`](../internal/licensemgr/) | License manager: file store round trips, modes and schema check, folder lock, audit tail; key encryption, wrong passphrase, tampering, idle lock; building and validating licenses; HTTP login, CSRF, throttling, and the issue, renew, change and verify flows against `license.Verify` |
 | [`internal/scheduler/scheduler_test.go`](../internal/scheduler/scheduler_test.go) | `Due` for weekly, one-off and disabled schedules |
 | [`ai/tests/test_ai.py`](../ai/tests/test_ai.py) | Answer normalisation, prompt, `/detect` with a mocked Ollama, unreadable images |
 
