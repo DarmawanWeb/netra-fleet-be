@@ -45,7 +45,7 @@ func Files(dir string) (files fs.FS, ok bool, err error) {
 }
 
 // detail matches the detail routes the export holds once (/anomalies/0.html) for every id.
-var detail = regexp.MustCompile(`^/(anomalies|patrols|robots)/[^/]+?(\.txt)?$`)
+var detail = regexp.MustCompile(`^/(anomalies|patrols|robots|substation/(?:assets|points|findings))/[^/]+?(\.txt)?$`)
 
 // Resolve maps a request path to the file that answers it: the path, path.html,
 // path/index.html, then the detail page of its section. ok is false for a 404.
