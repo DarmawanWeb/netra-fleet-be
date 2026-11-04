@@ -500,6 +500,15 @@ func (s *Server) calibrateFloorPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.ID, _ = pathID(r)
+	cur, err := s.store.GetFloorPlan(r.Context(), p.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if cur.Kind == store.PlanPGM {
+		writeError(w, http.StatusConflict, "a robot map is placed by its map.yaml and cannot be calibrated")
+		return
+	}
 	if err := s.store.CalibrateFloorPlan(r.Context(), p); err != nil {
 		fail(w, err)
 		return

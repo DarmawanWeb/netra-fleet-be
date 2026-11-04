@@ -115,7 +115,6 @@ func (s *Server) Handler() http.Handler {
 	route(operate, "POST /api/v1/patrols/{id}/stop", s.stopPatrol)
 	route(view, "GET /api/v1/events", s.listEvents)
 	route(view, "GET /api/v1/floorplans", s.listFloorPlans)
-	route(configure, "POST /api/v1/floorplans", s.uploadFloorPlan)
 	route(configure, "PUT /api/v1/floorplans/{id}", s.calibrateFloorPlan)
 	route(configure, "DELETE /api/v1/floorplans/{id}", s.deleteFloorPlan)
 	route(view, "GET /api/v1/floorplans/{id}/file", s.floorPlanFile)
@@ -127,6 +126,22 @@ func (s *Server) Handler() http.Handler {
 	route(auth.PermUsers, "POST /api/v1/users/{id}/password", s.resetPassword)
 	route(auth.PermUsers, "GET /api/v1/license", s.getLicense)
 	route(auth.PermUsers, "PUT /api/v1/license", s.putLicense)
+
+	// Map modes, fixed by the license: uploads of the kind of map the deployment draws on, and
+	// the georeference of a gps deployment (409 "this deployment uses <mode> maps" otherwise).
+	// Existing floor plans stay viewable and assignable in every mode.
+	mapped := func(modes []string, p auth.Permission, pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, s.mapModes(modes, s.requireUser(p, h)))
+	}
+	floorplan, pgm, gps := []string{license.MapFloorPlan}, []string{license.MapPGM}, []string{license.MapGPS}
+	mapped(floorplan, configure, "POST /api/v1/floorplans", s.uploadFloorPlan)
+	mapped(pgm, configure, "POST /api/v1/floorplans/pgm", s.uploadRobotMap)
+	mapped(gps, view, "GET /api/v1/geo", s.getGeo)
+	mapped(gps, configure, "PUT /api/v1/geo", s.putGeo)
+	mapped(gps, configure, "POST /api/v1/geo/fit", s.fitGeo)
+	mapped(gps, configure, "POST /api/v1/geo/overlay", s.uploadGeoOverlay)
+	mapped(gps, view, "GET /api/v1/geo/overlay/file", s.geoOverlayFile)
+	mapped(gps, configure, "DELETE /api/v1/geo/overlay", s.deleteGeoOverlay)
 
 	// Anomaly: robot detections, validation, category rules, on-robot inspection.
 	module(license.Anomaly, view, "GET /api/v1/anomalies", s.listAnomalies)
@@ -197,6 +212,10 @@ func bearer(r *http.Request) string {
 
 func (s *Server) requireUser(perm auth.Permission, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.store == nil { // unit tests without a database: nobody is logged in
+			writeError(w, http.StatusUnauthorized, "login required")
+			return
+		}
 		user, err := s.store.SessionUser(r.Context(), auth.HashToken(bearer(r)))
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "login required")

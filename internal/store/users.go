@@ -33,6 +33,8 @@ type TrackPoint struct {
 	X        *float64  `json:"x"`
 	Y        *float64  `json:"y"`
 	Yaw      *float64  `json:"yaw"`
+	Lat      *float64  `json:"lat"` // GPS position, when the robot reports a fix
+	Lon      *float64  `json:"lon"`
 	Battery  *float64  `json:"battery"`
 	NavState string    `json:"nav_state"`
 	People   int       `json:"people"`
@@ -182,10 +184,10 @@ func (s *Store) ListAudit(ctx context.Context, username, action string, from, to
 // InsertTelemetry stores one history sample.
 func (s *Store) InsertTelemetry(ctx context.Context, robotID string, p TrackPoint, mode string, patrolID *int64) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO telemetry (ts, robot_id, x, y, yaw, battery, nav_state, mode, people, patrol_id,
-		cpu_percent, gpu_percent, memory_percent, memory_used_gb, memory_total_gb, cpu_temp_c)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		cpu_percent, gpu_percent, memory_percent, memory_used_gb, memory_total_gb, cpu_temp_c, lat, lon)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		p.TS, robotID, p.X, p.Y, p.Yaw, p.Battery, p.NavState, mode, p.People, patrolID,
-		p.CPUPercent, p.GPUPercent, p.MemoryPercent, p.MemoryUsedGB, p.MemoryTotalGB, p.CPUTempC)
+		p.CPUPercent, p.GPUPercent, p.MemoryPercent, p.MemoryUsedGB, p.MemoryTotalGB, p.CPUTempC, p.Lat, p.Lon)
 	return err
 }
 
@@ -193,10 +195,10 @@ func (s *Store) InsertTelemetry(ctx context.Context, robotID string, p TrackPoin
 func (s *Store) Track(ctx context.Context, robotID string, from, to time.Time, maxPoints int) ([]TrackPoint, error) {
 	rows, err := s.db.QueryContext(ctx, `WITH t AS (
 			SELECT ts, x, y, yaw, battery, nav_state, people, cpu_percent, gpu_percent, memory_percent, memory_used_gb,
-				memory_total_gb, cpu_temp_c, row_number() OVER (ORDER BY ts) AS n, count(*) OVER () AS total
+				memory_total_gb, cpu_temp_c, lat, lon, row_number() OVER (ORDER BY ts) AS n, count(*) OVER () AS total
 			FROM telemetry WHERE robot_id = $1 AND ts BETWEEN $2 AND $3)
 		SELECT ts, x, y, yaw, battery, nav_state, people, cpu_percent, gpu_percent, memory_percent, memory_used_gb,
-			memory_total_gb, cpu_temp_c FROM t
+			memory_total_gb, cpu_temp_c, lat, lon FROM t
 		WHERE total <= $4 OR n % ceil(total::float / $4)::int = 0 ORDER BY ts`, robotID, from, to, maxPoints)
 	if err != nil {
 		return nil, err
@@ -206,7 +208,7 @@ func (s *Store) Track(ctx context.Context, robotID string, from, to time.Time, m
 	for rows.Next() {
 		var p TrackPoint
 		if err := rows.Scan(&p.TS, &p.X, &p.Y, &p.Yaw, &p.Battery, &p.NavState, &p.People, &p.CPUPercent, &p.GPUPercent,
-			&p.MemoryPercent, &p.MemoryUsedGB, &p.MemoryTotalGB, &p.CPUTempC); err != nil {
+			&p.MemoryPercent, &p.MemoryUsedGB, &p.MemoryTotalGB, &p.CPUTempC, &p.Lat, &p.Lon); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

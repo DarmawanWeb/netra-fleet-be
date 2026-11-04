@@ -146,6 +146,7 @@ func (s *Server) logTelemetry(ctx context.Context, robotID string, data []byte, 
 		} `json:"battery"`
 		People int         `json:"people"`
 		Health *store.Load `json:"health"`
+		GPS    *gpsFix     `json:"gps"`
 	}
 	if json.Unmarshal(data, &t) != nil {
 		return
@@ -157,6 +158,9 @@ func (s *Server) logTelemetry(ctx context.Context, robotID string, data []byte, 
 	if t.Pose != nil {
 		p.X, p.Y, p.Yaw = &t.Pose.X, &t.Pose.Y, &t.Pose.Yaw
 	}
+	if t.GPS.valid() {
+		p.Lat, p.Lon = t.GPS.Lat, t.GPS.Lon
+	}
 	if t.Battery != nil {
 		p.Battery = t.Battery.Pct
 		if t.Battery.Pct != nil {
@@ -166,6 +170,21 @@ func (s *Server) logTelemetry(ctx context.Context, robotID string, data []byte, 
 	if err := s.store.InsertTelemetry(ctx, robotID, p, t.Mode, patrolID); err != nil {
 		slog.Warn("telemetry history", "err", err)
 	}
+}
+
+// gpsFix is the optional GPS position of robot telemetry: WGS84 degrees, the fix quality (none,
+// gps, dgps, rtk_float, rtk_fixed) and the horizontal dilution of precision.
+type gpsFix struct {
+	Lat  *float64 `json:"lat"`
+	Lon  *float64 `json:"lon"`
+	Fix  string   `json:"fix"`
+	HDOP *float64 `json:"hdop"`
+}
+
+// valid reports whether the robot has a position: latitude and longitude on the earth and a fix.
+func (g *gpsFix) valid() bool {
+	return g != nil && g.Lat != nil && g.Lon != nil && g.Fix != "none" && *g.Lat >= -90 && *g.Lat <= 90 &&
+		*g.Lon >= -180 && *g.Lon <= 180
 }
 
 // sendCommand sends a command to a robot and remembers it until the ack.
