@@ -68,8 +68,10 @@ func (s *Server) inspectionArgs(enabled *bool, model *string, interval *float64)
 	return args, nil
 }
 
-func (s *Server) replyAck(w http.ResponseWriter, r *http.Request, action string, args map[string]any, res ackResult, err error) {
-	robotID := r.PathValue("id")
+// replyAck answers a command the request waited for and audits it against target (the robot).
+func (s *Server) replyAck(w http.ResponseWriter, r *http.Request, action, target string, args map[string]any, res ackResult,
+	err error) {
+	robotID := target
 	detail := map[string]any{"args": args}
 	switch {
 	case errors.Is(err, errAckTimeout):
@@ -108,7 +110,7 @@ func (s *Server) robotInspection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := s.commandAndWait(r.PathValue("id"), "set_inspection", args)
-	s.replyAck(w, r, "robot.inspection", args, res, err)
+	s.replyAck(w, r, "robot.inspection", r.PathValue("id"), args, res, err)
 }
 
 // robotPeople turns on-robot people detection on or off.
@@ -122,7 +124,7 @@ func (s *Server) robotPeople(w http.ResponseWriter, r *http.Request) {
 	}
 	args := map[string]any{"enabled": *body.Enabled}
 	res, err := s.commandAndWait(r.PathValue("id"), "set_people", args)
-	s.replyAck(w, r, "robot.people", args, res, err)
+	s.replyAck(w, r, "robot.people", r.PathValue("id"), args, res, err)
 }
 
 func (s *Server) inspectionModels(w http.ResponseWriter, _ *http.Request) {
