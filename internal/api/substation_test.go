@@ -48,6 +48,12 @@ func TestSubstationRoutesFollowTheLicense(t *testing.T) {
 			t.Errorf("licensed %s %s: %d, want 401", rt.method, rt.path, code)
 		}
 	}
+	// The exports need the export module as well.
+	for _, path := range []string{"/api/v1/reports/substation/findings", "/api/v1/reports/substation/inspections"} {
+		if code, body := call(with, http.MethodGet, path); code != http.StatusForbidden || body["feature"] != license.ReportsExport {
+			t.Errorf("%s without exports: %d %v", path, code, body)
+		}
+	}
 }
 
 func f64(v float64) *float64 { return &v }

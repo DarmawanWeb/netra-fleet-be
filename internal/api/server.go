@@ -196,6 +196,12 @@ func (s *Server) Handler() http.Handler {
 	module(license.ReportsExport, view, "GET /api/v1/reports/summary", s.summaryReport)
 	module(license.ReportsExport, view, "GET /api/v1/reports/anomalies", s.anomaliesExport)
 	module(license.ReportsExport, view, "GET /api/v1/reports/patrols", s.patrolsExport)
+	// Substation exports need both modules.
+	subReport := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, s.feature(license.ReportsExport, s.feature(license.Substation, s.requireUser(view, h))))
+	}
+	subReport("GET /api/v1/reports/substation/findings", s.findingsExport)
+	subReport("GET /api/v1/reports/substation/inspections", s.inspectionsExport)
 
 	// The audit log page; actions are recorded with or without it.
 	module(license.Audit, auth.PermAudit, "GET /api/v1/audit", s.listAudit)
