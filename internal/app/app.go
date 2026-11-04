@@ -97,8 +97,16 @@ func Serve(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("license: %w", err)
 	}
+	var nc *bus.Client
+	if cfg.NatsURL != "" {
+		if nc, err = bus.Dial(cfg.NatsURL, bus.Options{Name: "netra-api"}); err != nil {
+			slog.Error("nats disabled", "err", err) // domain events only: the service runs without them
+		} else {
+			defer nc.Close()
+		}
+	}
 	srv := api.New(cfg, st, hub.New(), notify.NewTelegram(cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPI),
-		Detector(cfg), bus.New(cfg.NatsURL), lic)
+		Detector(cfg), bus.NewPublisher(nc), lic)
 
 	rt := api.Runtime{StartedAt: started, ManagedDB: db.Managed != nil, DataDir: cfg.DataDir, BackupAt: cfg.BackupAt}
 	if cfg.BackupKeepDays > 0 {
