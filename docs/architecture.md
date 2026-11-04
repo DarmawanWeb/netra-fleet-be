@@ -512,7 +512,7 @@ floor plans (listing, files, assigning a plan to a robot, deleting, calibrating 
    map_server does (`occ = 1 − value/maxval`, or `value/maxval` with `negate`): in `trinary` mode
    occupied above `occupied_thresh`, free below `free_thresh`, unknown between; `scale` mode
    shades the values between (and makes transparent pixels unknown); `raw` mode takes the value as
-   the occupancy. It writes a paletted PNG: free `#f1f5f9`, occupied `#1e293b`, unknown `#a3adbd`,
+   the occupancy. It writes a paletted PNG: free `#f1f5f9`, occupied `#1e293b`, unknown `#b4bdca`,
    shades between free and occupied. The dashboard shows it as is in the light theme and inverted
    with the hue kept in the dark one (free a deep navy, walls pale).
 4. `Meta.Calibration` turns origin and resolution into the floor plan calibration, so the plan

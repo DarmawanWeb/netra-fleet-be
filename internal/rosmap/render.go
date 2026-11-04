@@ -19,7 +19,7 @@ const (
 var (
 	FreeColor     = color.RGBA{241, 245, 249, 255}
 	OccupiedColor = color.RGBA{30, 41, 59, 255}
-	UnknownColor  = color.RGBA{163, 173, 189, 255}
+	UnknownColor  = color.RGBA{180, 189, 202, 255}
 )
 
 // Occupancy is the occupancy (Unknown, or Free to Occupied) of a pixel with value v of maxval and
