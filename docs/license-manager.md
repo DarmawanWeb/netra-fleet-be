@@ -32,7 +32,7 @@ Keep it on localhost. To reach it from another machine, tunnel it
 (`ssh -L 8099:127.0.0.1:8099 <host>`) or serve it over TLS with `-tls-cert` and `-tls-key`; the
 manager logs a warning when it listens beyond the machine without TLS.
 
-Build the manager from the same commit as the `netra-api` release you issue for: it tells whether
+Build the manager from the same commit as the NETRA release you issue for: it tells whether
 its key is among the keys built into that commit (`internal/license/keys/*.pub`).
 
 ## First start
@@ -44,7 +44,7 @@ its key is among the keys built into that commit (`internal/license/keys/*.pub`)
 2. **The signing key.** Signing key > Generate a new key, or Import an existing key (the `.key` file
    of `netra-license keygen`). Import the key that already signs client licenses if there is one.
 3. **Trust.** Copy the public key (or download `ezra-<fingerprint>.pub`) to
-   `internal/license/keys/` and release `netra-api`. Until a release carries it, every netra-api
+   `internal/license/keys/` and release NETRA. Until a release carries it, every NETRA server
    refuses the manager's licenses; the dashboard, the issue form and the key page say so.
 
 ## The signing key
@@ -68,7 +68,7 @@ from the UI, so a key that signed licenses cannot be lost by a click.
 
 1. Stop the manager and move `key.enc` out of the data folder (keep it with the backups).
 2. Start it, generate or import the new key, and add its `.pub` next to the old one in
-   `internal/license/keys/`; release `netra-api`.
+   `internal/license/keys/`; release NETRA.
 3. Renew every client license (Renew signs with the current key) and send them.
 4. Remove the old `.pub` once every client runs a license of the new key
    ([keys/README.md](../internal/license/keys/README.md)).
@@ -137,12 +137,12 @@ expiry, modules still on) and expired.
 Paste any license text, or open a `.lic` file. The manager decodes the payload (also when no key
 signed it), checks the signature against its own key and against the keys built into this build,
 the status, the binding against an installation ID you give, and whether it issued that license
-with exactly that text. A text with line breaks inside (a wrapped e-mail) is reported: netra-api
+with exactly that text. A text with line breaks inside (a wrapped e-mail) is reported: NETRA
 refuses it as it is.
 
 ## Operators, sessions and the audit log
 
-- Operators sign in with a username and a password (PBKDF2-SHA256, as in netra-api). Every operator
+- Operators sign in with a username and a password (PBKDF2-SHA256, as in NETRA). Every operator
   can do everything. Removing an operator ends their sessions; changing your password ends your
   other sessions.
 - The session is an HttpOnly, `SameSite=Strict` cookie (`Secure` over TLS), valid 12 hours, kept in
@@ -194,7 +194,7 @@ apart from the backups (a password manager or a sealed envelope).
 **Restore**: stop the manager, put the folder back, start it, unlock the key.
 
 Losing both `key.enc` (with its passphrase) and the original `.key` means no new license is accepted
-until a `netra-api` release trusts a new key; the licenses already installed keep working.
+until a NETRA release trusts a new key; the licenses already installed keep working.
 
 ## HTTP API
 

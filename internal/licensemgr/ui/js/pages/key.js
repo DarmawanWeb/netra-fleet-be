@@ -7,7 +7,7 @@ const passphraseFields = (minimum) => html`
 function setupHTML(meta) {
   return html`
     <div class="callout">${icon('info')}<div class="grow"><b>One key signs every license.</b>
-      <p>Its public half goes into netra-api (<code>internal/license/keys/</code>); only builds carrying it accept the licenses it signs.
+      <p>Its public half goes into NETRA (<code>internal/license/keys/</code>); only builds carrying it accept the licenses it signs.
       If a key already signs licenses for clients, import that one instead of making a new one.</p></div></div>
     <div class="grid cols-2">
       <section class="panel">
@@ -63,15 +63,15 @@ function keyHTML(k, meta) {
             <div class="field-gap"></div>
             ${
               k.trusted
-                ? html`<div class="callout ok">${icon('check')}<div class="grow"><b>Built into this build of netra-api.</b>
+                ? html`<div class="callout ok">${icon('check')}<div class="grow"><b>Built into this build of NETRA.</b>
                   <p>Servers running this version accept the licenses signed here.</p></div></div>`
-                : html`<div class="callout warn">${icon('alert')}<div class="grow"><b>Not built into this build of netra-api.</b>
+                : html`<div class="callout warn">${icon('alert')}<div class="grow"><b>Not built into this build of NETRA.</b>
                   <p>${k.trusted_keys ? `It trusts ${k.trusted_keys} other key${k.trusted_keys === 1 ? '' : 's'}.` : 'It trusts no key at all.'}
-                  netra-api builds without this public key refuse every license signed here.${k.trust_error ? ` (${k.trust_error})` : ''}</p></div></div>`
+                  NETRA builds without this public key refuse every license signed here.${k.trust_error ? ` (${k.trust_error})` : ''}</p></div></div>`
             }
             <ol class="steps">
               <li>Save it as <code>internal/license/keys/${k.file_name}</code> in netra-fleet-be (only the <code>.pub</code>).</li>
-              <li>Commit it and release netra-api; the images built from then on accept these licenses.</li>
+              <li>Commit it and release NETRA; the installers and images built from then on accept these licenses.</li>
               <li>Keep the old <code>.pub</code> until every client has a license signed by this key.</li>
             </ol>
           </div>

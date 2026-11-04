@@ -257,7 +257,7 @@ type verifyView struct {
 	Warning      string           `json:"warning,omitempty"` // a fixable problem of the text
 	License      *license.License `json:"license,omitempty"` // the payload, decoded also when no key signed it
 	Manager      signatureCheck   `json:"manager"`           // the manager's key
-	BuiltIn      signatureCheck   `json:"built_in"`          // the keys built into this build of netra-api
+	BuiltIn      signatureCheck   `json:"built_in"`          // the keys built into this build of NETRA
 	Status       license.Status   `json:"status,omitempty"`
 	Expiring     bool             `json:"expiring"`
 	GraceEnds    *time.Time       `json:"grace_ends,omitempty"`
@@ -311,7 +311,7 @@ func checkSignature(text string, keys []ed25519.PublicKey) signatureCheck {
 	return c
 }
 
-// verify checks any license text the way netra-api does, against the manager's key and the keys
+// verify checks any license text the way NETRA does, against the manager's key and the keys
 // built into this build.
 func (s *Server) verify(w http.ResponseWriter, r *http.Request, _ string) {
 	var body struct {
@@ -326,7 +326,7 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, _ string) {
 	text := strings.TrimSpace(body.Text)
 	if strings.ContainsAny(text, " \t\r\n") {
 		text = strings.Join(strings.Fields(text), "")
-		v.Warning = "the text has line breaks or spaces inside (a mail program may have wrapped it): netra-api " +
+		v.Warning = "the text has line breaks or spaces inside (a mail program may have wrapped it): NETRA " +
 			"refuses it as is; send the .lic file, or join the text into one line"
 	}
 	l, err := decodeText(text)

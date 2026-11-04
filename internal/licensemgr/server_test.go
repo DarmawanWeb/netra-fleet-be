@@ -282,7 +282,7 @@ func TestIssueFlow(t *testing.T) {
 		l.Branding.Name != "NETRA Gardu" || l.Branding.ColorDark != "#2dd4bf" || l.Branding.Logo != svgLogo {
 		t.Fatalf("signed license: %+v", l)
 	}
-	// netra-api accepts it on that installation only.
+	// NETRA accepts it on that installation only.
 	if _, err := license.NewState([]ed25519.PublicKey{pub}, "NETRA-7KQ3-M9XD-2WPA").Apply(string(file), "upload"); err != nil {
 		t.Fatalf("bound server: %v", err)
 	}

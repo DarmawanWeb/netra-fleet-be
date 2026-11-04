@@ -214,7 +214,7 @@ func cleanBranding(b license.Branding) (license.Branding, error) {
 	return b, nil
 }
 
-// checkLogo accepts what netra-api serves as the logo: an SVG or PNG base64 data URL.
+// checkLogo accepts what NETRA serves as the logo: an SVG or PNG base64 data URL.
 func checkLogo(url string) error {
 	head, body, _ := strings.Cut(url, ",")
 	if head != "data:image/svg+xml;base64" && head != "data:image/png;base64" {
