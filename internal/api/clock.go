@@ -34,9 +34,11 @@ func (s *Server) robotTime(robotID string, ts float64) time.Time {
 		return time.Now()
 	}
 	t := unixTime(ts)
-	s.mu.Lock()
-	skew, known := s.skew[robotID]
-	s.mu.Unlock()
+	skew, known := s.offset(robotID)
+	if !known && s.relay != nil {
+		// a split installation with several gateways: the robot's telemetry may reach another one
+		skew, known = s.relay.ClockSkew(robotID)
+	}
 	if known && (skew > clockSkewMin || skew < -clockSkewMin) {
 		return t.Add(skew)
 	}

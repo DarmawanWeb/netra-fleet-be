@@ -113,10 +113,14 @@ func (n *NATS) Start() error {
 		return err
 	}
 	var errs []error
-	if n.h.Dashboards != nil {
-		errs = append(errs, sub(SubjectLive, func(m bus.Msg) { n.h.Dashboards(m.Data) }),
-			sub(SubjectPresence, n.presence))
+	// api processes show the robots; gateways use the clock offsets other gateways measured
+	presenceToo := n.h.Dashboards != nil || n.h.Gateway != nil
+	if presenceToo {
+		errs = append(errs, sub(SubjectPresence, n.presence))
 		n.c.OnConnect(n.askPresence)
+	}
+	if n.h.Dashboards != nil {
+		errs = append(errs, sub(SubjectLive, func(m bus.Msg) { n.h.Dashboards(m.Data) }))
 	}
 	if n.h.Gateway != nil {
 		errs = append(errs, sub(SubjectPresenceQuery, func(bus.Msg) { n.RobotsChanged() }))
@@ -153,7 +157,7 @@ func (n *NATS) Start() error {
 		return err
 	}
 	if n.c.Connected() { // OnConnect only runs for the next connections
-		if n.h.Dashboards != nil {
+		if presenceToo {
 			n.askPresence()
 		}
 		n.RobotsChanged()

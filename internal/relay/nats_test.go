@@ -113,6 +113,14 @@ func TestNATSLiveAndPresence(t *testing.T) {
 	g2 := newFakeGateway("x30-01")
 	gw2 := start(t, srv, "gw-2", Handlers{Gateway: g2})
 	eventually(t, "second gateway", func() bool { return a1.Online("x30-01") && a1.OnlineCount() == 2 })
+	// a robot's upload may reach another gateway than its telemetry: that one knows the offset too
+	behind := 30.0
+	g.set("l1w-02", true, &behind)
+	gw.RobotsChanged()
+	eventually(t, "offset measured by another gateway", func() bool {
+		d, ok := gw2.ClockSkew("l1w-02")
+		return ok && d == 30*time.Second
+	})
 	gw2.Close()
 	eventually(t, "robots of a closed gateway", func() bool { return !a1.Online("x30-01") })
 }

@@ -3,6 +3,8 @@ package api
 import (
 	"testing"
 	"time"
+
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 )
 
 func newClockServer() *Server { return &Server{skew: map[string]time.Duration{}} }
@@ -68,5 +70,22 @@ func TestNoteClockReportsNewOffsets(t *testing.T) {
 	}
 	if s.noteClock("l1w-01", 0, later) {
 		t.Fatal("telemetry without ts reported")
+	}
+}
+
+// otherGateway reports the offset another gateway measured; only ClockSkew is called.
+type otherGateway struct {
+	relay.Gateway
+	skew time.Duration
+}
+
+func (g otherGateway) ClockSkew(string) (time.Duration, bool) { return g.skew, true }
+
+func TestRobotTimeUsesTheOffsetOfAnotherGateway(t *testing.T) {
+	s := newClockServer()
+	s.relay = relay.NewLocal(relay.Handlers{Gateway: otherGateway{skew: time.Hour}})
+	ts := time.Now().Add(-time.Hour) // the robot clock is an hour behind; its telemetry went elsewhere
+	if got := s.robotTime("l1w-01", unix(ts)); time.Since(got).Abs() > time.Second {
+		t.Fatalf("robotTime = %v, want about now", got)
 	}
 }
