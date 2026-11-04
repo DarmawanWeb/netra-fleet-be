@@ -48,6 +48,14 @@ erDiagram
     robots ||--o{ events : reports
     patrols |o--o{ events : "reported during"
     api_clients ||--o{ api_tokens : issues
+    assets |o--o{ inspection_points : "measured at"
+    routes |o--o{ inspection_points : "stops at"
+    inspection_points ||--o{ inspections : "captured at"
+    robots |o--o{ inspections : uploads
+    patrols |o--o{ inspections : "taken during"
+    inspection_points ||--o{ findings : "deficiency of"
+    assets |o--o{ findings : concerns
+    inspections ||--o{ findings : "first and last seen in"
 
     users {
         bigint id PK
@@ -144,6 +152,36 @@ erDiagram
         double scale
         text basemap
     }
+    assets {
+        bigint id PK
+        text tag UK
+        text kind
+        boolean archived
+    }
+    inspection_points {
+        bigint id PK
+        text kind
+        bigint asset_id FK
+        bigint route_id FK
+        int stop_index
+        jsonb targets
+    }
+    inspections {
+        bigint id PK
+        text uid UK
+        bigint point_id FK
+        text robot_id FK
+        bigint patrol_id FK
+        smallint priority
+    }
+    findings {
+        bigint id PK
+        bigint point_id FK
+        text target_key
+        bigint asset_id FK
+        text status
+        smallint priority
+    }
 ```
 
 | Table | Holds | Written by |
@@ -164,6 +202,9 @@ erDiagram
 | `api_clients`, `api_tokens` | Integration clients and their access tokens | API client routes, `/api/ext/v1/oauth/token` |
 | `license`, `settings` | The license uploaded in the dashboard; the installation ID | License routes, first start |
 | `geo_site` | The georeference of a `gps` deployment: control points, fitted transform, basemap, overlay | Site georeference routes |
+| `assets`, `inspection_points` | Substation equipment and where robots inspect it | Substation routes |
+| `inspections` | Thermal and partial discharge captures with their ratings | Robot inspection uploads |
+| `findings` | Deficiencies from their first abnormal reading until resolved | Robot inspection uploads, acknowledge and resolve routes |
 
 ## Migrations
 
@@ -505,6 +546,89 @@ that reports a fix, for trails and track replay on a `gps` map.
 Migrations run under the advisory lock `7151987`, so servers starting on one database at once
 apply them one after the other.
 
+### 009_substation.sql
+
+[`009_substation.sql`](../internal/store/migrations/009_substation.sql) adds substation inspection
+([substation](substation.md)).
+
+**`assets`**: the equipment of the site
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL` | Primary key |
+| `tag` | `TEXT` | Not null; unique ignoring case (index `assets_tag` on `lower(tag)`) |
+| `name`, `kind` | `TEXT` | Not null; `kind` one of `substation.AssetKinds`, checked by the API |
+| `bay`, `phase`, `notes` | `TEXT` | Not null, default `''` |
+| `voltage_kv` | `DOUBLE PRECISION` | |
+| `x`, `y` | `DOUBLE PRECISION` | Position in the map frame, metres |
+| `archived` | `BOOLEAN` | Not null, default false |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+**`inspection_points`**: where a robot inspects
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL` | Primary key |
+| `name` | `TEXT` | Not null |
+| `kind` | `TEXT` | Not null; `CHECK` `thermal` or `pd` |
+| `asset_id` | `BIGINT` | References `assets(id)` `ON DELETE RESTRICT` |
+| `route_id` | `BIGINT` | References `routes(id)` `ON DELETE SET NULL` |
+| `stop_index` | `INT` | The route stop, `CHECK (stop_index >= 0)` |
+| `seq` | `INT` | Not null, default 0; order at the stop |
+| `ptz` | `JSONB` | `{pan_deg, tilt_deg, zoom}` |
+| `settings` | `JSONB` | Not null, default `'{}'`; `{reference, emissivity, distance_m, watch_db, alarm_db}` |
+| `targets` | `JSONB` | Not null, default `'[]'`; `[{key, label, asset_id, phase, group, roi, limit_c}]`, GIN index (`jsonb_path_ops`) for the assets they name |
+| `enabled` | `BOOLEAN` | Not null, default true |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+**`inspections`**: one capture with its rating
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL` | Primary key |
+| `uid` | `TEXT` | Not null, unique: robot uploads repeat safely |
+| `point_id` | `BIGINT` | Not null, references `inspection_points(id)` `ON DELETE RESTRICT` |
+| `robot_id` | `TEXT` | References `robots(id)` `ON DELETE SET NULL` |
+| `patrol_id` | `BIGINT` | References `patrols(id)` `ON DELETE SET NULL` |
+| `taken_at` | `TIMESTAMPTZ` | Not null; the robot time corrected for its clock offset |
+| `kind`, `reference` | `TEXT` | Not null; the point's kind and the reference that rated it |
+| `ambient_c` | `DOUBLE PRECISION` | |
+| `thermal` | `JSONB` | Every target's reading and rating (`substation.Result`) |
+| `pd` | `JSONB` | `{db, detected, kind, priority}` |
+| `priority` | `SMALLINT` | Not null, default 0; the most severe of the capture |
+| `x`, `y`, `yaw` | `DOUBLE PRECISION` | The robot pose |
+| `images` | `JSONB` | Not null, default `'{}'`; `{thermal, visual, acoustic}` file paths |
+| `created_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+Indexes on `(point_id, taken_at DESC)`, `patrol_id` and `taken_at DESC`.
+
+**`findings`**: a deficiency of one target until it is resolved
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL` | Primary key |
+| `point_id` | `BIGINT` | Not null, references `inspection_points(id)` `ON DELETE RESTRICT` |
+| `target_key` | `TEXT` | Not null; the thermal target, or `pd` |
+| `label`, `basis`, `note` | `TEXT` | Not null, default `''` |
+| `asset_id` | `BIGINT` | References `assets(id)` `ON DELETE SET NULL` |
+| `kind` | `TEXT` | Not null |
+| `status` | `TEXT` | Not null, default `open`; `CHECK` `open`, `acknowledged` or `resolved` |
+| `priority` | `SMALLINT` | Not null; the most severe seen while not resolved |
+| `last_priority` | `SMALLINT` | Not null; of the latest reading, 0 when normal |
+| `first_inspection_id`, `last_inspection_id` | `BIGINT` | Not null, reference `inspections(id)` `ON DELETE RESTRICT` |
+| `first_seen`, `last_seen` | `TIMESTAMPTZ` | Not null |
+| `last_value`, `last_delta_c` | `DOUBLE PRECISION` | °C (hottest) or dB, and the rise that rated it |
+| `occurrences` | `INT` | Not null, default 1; abnormal readings |
+| `acknowledged_by`, `resolved_by` | `TEXT` | Usernames |
+| `acknowledged_at`, `resolved_at`, `notified_at` | `TIMESTAMPTZ` | |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+The unique index `findings_active` on `(point_id, target_key) WHERE status <> 'resolved'` keeps one
+finding per target until it is resolved; recording an inspection and its findings is one
+transaction. Indexes on `asset_id` (not resolved) and `(status, priority, last_seen DESC)`.
+
+The site settings are the JSON value of the `settings` key `substation`.
+
 ## Retention
 
 - With TimescaleDB, `telemetry` rows older than 180 days are dropped and chunks older than 7 days
@@ -514,6 +638,8 @@ apply them one after the other.
   samples, `audit_log` and `sessions` (expired sessions included) grow until removed through the API
   or by hand. Deleting a robot cascades to its routes, schedules, patrols, anomalies, crowd samples
   and events, but not to `telemetry` rows or photo files.
+- Substation inspections, findings and their images are kept: a point with inspections and an asset
+  in use cannot be deleted, and deleting a robot only clears `inspections.robot_id`.
 
 ## Files outside the database
 
@@ -522,6 +648,7 @@ apply them one after the other.
 | `NETRA_DATA_DIR/anomalies/<YYYY-MM-DD>/<uid>.jpg` | `anomalies.image_path` | Robot anomaly upload; the date is the upload day in the process time zone |
 | `NETRA_DATA_DIR/floorplans/<unix nanoseconds><ext>` | `floor_plans.file_path` | Floor-plan upload, or the PNG rendered from a robot map (`.png`); deleted with the plan |
 | `NETRA_DATA_DIR/geo/overlay-<unix nanoseconds><ext>` | `geo_site.overlay_path` | Overlay upload (`.png`, `.jpg` or `.webp`); deleted when replaced or removed |
+| `NETRA_DATA_DIR/inspections/<YYYY-MM-DD>/<uid>-<name><ext>` | `inspections.images` | Robot inspection upload: `thermal`, `visual`, `acoustic`, `.jpg` or `.png`; kept with the inspection |
 
 The stored paths are built from `NETRA_DATA_DIR` at upload time (relative paths stay relative to
 the working directory). Back up the data directory together with the database, and keep

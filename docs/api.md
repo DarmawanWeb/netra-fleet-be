@@ -60,7 +60,7 @@ Errors are JSON with a single human-readable message:
 | 401 | `login required` (missing, unknown or expired session, or disabled user); `wrong username or password` at login; `unknown robot token` on robot routes |
 | 403 | `your role cannot do this`; `feature not licensed` with `"feature": "<module>"` on a module the license does not include ([licensing](licensing.md)); `robot limit of the license reached` with `robot_limit`; on robot routes an `X-Robot-Id` that does not match the token, or another robot's route |
 | 404 | `not found` |
-| 409 | Robot offline, robot ID or username already taken, patrol cannot start, last enabled admin; `this deployment uses <mode> maps` with `"map_mode": "<mode>"` on a route of another [map mode](#map-modes); a robot map cannot be calibrated |
+| 409 | Robot offline, robot ID or username already taken, patrol cannot start, last enabled admin; `this deployment uses <mode> maps` with `"map_mode": "<mode>"` on a route of another [map mode](#map-modes); a robot map cannot be calibrated; an asset tag already used, an asset or point still in use, a finding in a status that does not allow the change, an inspection point's kind |
 | 422 | The robot refused `set_inspection` or `set_people`; body `{"ok": false, "msg": "..."}` |
 | 429 | Too many failed logins from this IP (8 within 10 minutes) |
 | 500 | Database or file error; the message is the error text |
@@ -293,6 +293,86 @@ Module `crowd`, with `POST /api/v1/robots/{id}/people`.
 | GET | `/api/v1/crowd/heatmap` | view | `robot_id`, `from`, `to` → cells `{x, y, size, peak, mean, samples}`, `x`, `y` and `size` in map metres |
 | GET | `/api/v1/crowd/timeline` | view | `robot_id`, `bucket` (`hour` by default, or `day`), `from`, `to` → `{bucket, peak}` points, buckets truncated in `NETRA_TZ` |
 
+### Substation
+
+Module `substation`: the equipment, the inspection points robots take on their routes, what they
+measured, and the findings operators follow up. How readings are rated, the findings' life and the
+robot side are in [substation](substation.md).
+
+| Method | Path | Permission | What it does |
+|---|---|---|---|
+| GET | `/api/v1/substation/summary` | view | → `{assets, points, findings, unacknowledged, assets_by_condition, inspections_24h, last_inspection}`: findings not resolved by priority (`"1"` to `"4"`), open ones nobody acknowledged, assets by their most severe priority (`"ok"` for none) |
+| GET | `/api/v1/substation/criteria` | view | → `{thermal, asset_kinds, point_kinds, references}`: NETA MTS Table 100.18 as `{priority, similar, ambient, action}` rows, and the choices of the forms |
+| GET | `/api/v1/substation/settings` | view | → `{finding_priority, alert_priority, pd: {watch_db, alarm_db}, telegram_chat_id}` |
+| PUT | `/api/v1/substation/settings` | configure | The settings; fields not sent keep their value → the settings |
+| GET | `/api/v1/substation/assets` | view | `archived=true` adds archived assets → assets by bay and tag with their condition (`priority`, `open_findings`, `last_inspected`) |
+| POST | `/api/v1/substation/assets` | configure | `{tag, name, kind, bay, voltage_kv, phase, x, y, notes, archived}` → 201 the asset; 409 when the tag is taken (ignoring case) |
+| GET | `/api/v1/substation/assets/{id}` | view | → one asset |
+| PUT | `/api/v1/substation/assets/{id}` | configure | The asset body → the asset |
+| DELETE | `/api/v1/substation/assets/{id}` | configure | 409 while a point or a finding refers to it: archive it instead |
+| GET | `/api/v1/substation/points` | view | `route_id`, `enabled=true` → points by route, stop and `seq`, with the route's `robot_id` and the robot's `stance` `{x, y, yaw_deg}` at the stop |
+| POST | `/api/v1/substation/points` | configure | `{name, kind, asset_id, route_id, stop_index, seq, ptz, settings, targets, enabled}` → 201 the point |
+| GET | `/api/v1/substation/points/{id}` | view | → one point |
+| PUT | `/api/v1/substation/points/{id}` | configure | The point body; 409 when `kind` changes → the point |
+| DELETE | `/api/v1/substation/points/{id}` | configure | 409 when it has inspections: disable it instead |
+| GET | `/api/v1/substation/points/{id}/trend` | view | `from` (30 days before `to` by default), `to` → `{point_id, kind, series: [{key, label}], samples: [{inspection_id, taken_at, ambient_c, priority, values: {key: °C or dB}}]}`, oldest first, at most 2000 |
+| POST | `/api/v1/substation/points/{id}/inspect` | operate | Sends `inspect_point` to the robot of the point's route and waits for the ack: 200 `{ok, msg}`, 422 refused, 409 robot offline or no route, 504 no answer |
+| GET | `/api/v1/substation/inspections` | view | `point_id`, `patrol_id`, `robot_id`, `priority` (rated this or more severe), `from`, `to`, `limit` (500, at most 5000) → inspections, newest first |
+| GET | `/api/v1/substation/inspections/{id}` | view | → one inspection |
+| GET | `/api/v1/substation/inspections/{id}/image/{name}` | view | `thermal`, `visual` or `acoustic` → the JPEG or PNG; 404 when the capture has none |
+| GET | `/api/v1/substation/findings` | view | `status` (`open`, `acknowledged`, `resolved`, or `active` for the first two), `priority`, `asset_id`, `point_id`, `from` and `to` (on `last_seen`; any time without them), `limit` → findings: not resolved first, then by priority and latest |
+| GET | `/api/v1/substation/findings/{id}` | view | → one finding |
+| POST | `/api/v1/substation/findings/{id}/acknowledge` | operate | Optional `{note}` → the finding; 409 unless it is open |
+| POST | `/api/v1/substation/findings/{id}/resolve` | operate | Optional `{note}` → the finding; 409 when it is resolved |
+
+A point, as returned:
+
+```json
+{
+  "id": 3, "name": "Line 1 disconnector", "kind": "thermal", "asset_id": 1, "route_id": 7, "stop_index": 0,
+  "seq": 0, "ptz": {"pan_deg": -30, "tilt_deg": 12, "zoom": 4},
+  "settings": {"reference": "auto", "emissivity": 0.95},
+  "targets": [
+    {"key": "r", "label": "Clamp R", "asset_id": 1, "phase": "R", "group": "clamp", "roi": {"x": 0.1, "y": 0.4, "w": 0.2, "h": 0.2}, "limit_c": null},
+    {"key": "t", "label": "Clamp T", "asset_id": 1, "phase": "T", "group": "clamp", "roi": {"x": 0.7, "y": 0.4, "w": 0.2, "h": 0.2}, "limit_c": null}
+  ],
+  "enabled": true, "created_at": "2026-11-04T07:02:11Z", "updated_at": "2026-11-04T07:02:11Z",
+  "last_inspected": "2026-11-04T08:15:45Z", "priority": 1, "robot_id": "gi-01",
+  "stance": {"x": 10, "y": 0, "yaw_deg": 90}
+}
+```
+
+An inspection keeps every target's rating; `thermal` or `pd` depending on the point:
+
+```json
+{
+  "id": 41, "uid": "f0b3c1d2-7a8e-4b1f-9c2d-3e4f5a6b7c8d", "point_id": 3, "point_name": "Line 1 disconnector",
+  "robot_id": "gi-01", "patrol_id": 42, "taken_at": "2026-11-04T08:15:45Z", "kind": "thermal",
+  "reference": "auto", "ambient_c": 31,
+  "thermal": [
+    {"key": "r", "max_c": 40.2, "label": "Clamp R", "asset_id": 1, "ref_key": "t", "delta_similar_c": -18.1, "delta_ambient_c": 9.2, "priority": 0},
+    {"key": "t", "max_c": 58.3, "label": "Clamp T", "asset_id": 1, "ref_key": "r", "delta_similar_c": 18.1, "delta_ambient_c": 27.3, "priority": 1, "basis": "similar"}
+  ],
+  "priority": 1, "x": 10, "y": 0.1, "yaw": 1.57, "images": ["thermal", "visual"],
+  "created_at": "2026-11-04T08:15:46Z"
+}
+```
+
+A finding:
+
+```json
+{
+  "id": 12, "point_id": 3, "point_name": "Line 1 disconnector", "target_key": "t", "label": "Clamp T",
+  "asset_id": 1, "asset_tag": "PMS-L1", "asset_name": "Disconnector line 1", "kind": "thermal",
+  "status": "acknowledged", "priority": 1, "basis": "similar", "last_priority": 3,
+  "first_inspection_id": 41, "last_inspection_id": 44, "first_seen": "2026-11-04T08:15:45Z",
+  "last_seen": "2026-11-05T08:14:02Z", "last_value": 50, "last_delta_c": 10, "occurrences": 2,
+  "note": "WO-2211 hot clamp", "acknowledged_by": "supervisor", "acknowledged_at": "2026-11-04T09:01:13Z",
+  "resolved_by": null, "resolved_at": null, "notified_at": "2026-11-04T08:15:47Z",
+  "created_at": "2026-11-04T08:15:46Z", "updated_at": "2026-11-05T08:14:03Z"
+}
+```
+
 ### Map modes
 
 The license fixes the kind of map a deployment draws on (`map_mode` in `GET /api/v1/info`):
@@ -429,6 +509,8 @@ The answer is a file download (`Content-Disposition: attachment`).
 | GET | `/api/v1/reports/summary` | view | `robot_id`, `format` (`xlsx`, otherwise PDF) → `netra-summary.pdf` or `netra-summary.xlsx` |
 | GET | `/api/v1/reports/anomalies` | view | `status`, `category`, `robot_id` → `anomalies.xlsx` |
 | GET | `/api/v1/reports/patrols` | view | `robot_id` → `patrols.xlsx` |
+| GET | `/api/v1/reports/substation/findings` | view | Module `substation` too; the filters of the findings list → `findings.xlsx` |
+| GET | `/api/v1/reports/substation/inspections` | view | Module `substation` too; `point_id`, `patrol_id`, `robot_id`, `priority` → `readings.xlsx`, a row per thermal target or pd reading |
 
 The contents are described in [architecture](architecture.md#reports).
 
@@ -498,6 +580,8 @@ reload state from the REST API after a reconnect.
 | `anomaly` | `id`, `status`, and depending on the event `robot_id`, `category`, `notified` | Upload (`queued`, with `robot_id`), final detection (with `robot_id` and `category`), operator decision, Telegram alert sent (`notified: true`) |
 | `license` | `license` (as in `GET /api/v1/license`) | A license was uploaded in the dashboard |
 | `geo` | none | The site georeference or its overlay changed (`gps` maps) |
+| `inspection` | `id`, `point_id`, `robot_id`, `priority`, `kind` | A robot uploaded a new inspection (module `substation`) |
+| `finding` | `id`, `event`, `status`, `priority`, `point_id`, `asset_id`, and `last_priority` except for `notified` | A finding `opened`, was `seen` again, `escalated` or read `normal`; an operator `acknowledged` or `resolved` it; it was sent to Telegram (`notified`) |
 
 ```json
 {"type": "robot_online", "robot_id": "l1w-01", "online": true}
@@ -523,6 +607,8 @@ the server side is described in [architecture](architecture.md#robot-connection-
 | POST | `/api/v1/robot/anomalies` | Multipart `meta` (JSON with `uid`) and `image.jpg` → 201 `{id, created}`; idempotent on `uid`. Without the module `anomaly`: 202 `{id: 0, created: false, dropped}`, nothing kept |
 | POST | `/api/v1/robot/routes` | Multipart `meta` (JSON with `uid`) and `route.csv` → 201 `{id}`; idempotent on `uid` |
 | GET | `/api/v1/robot/routes/{id}/file` | → the route CSV; 403 for a route of another robot |
+| GET | `/api/v1/robot/routes/{id}/inspection` | → `{route_id, points}`: the route's enabled inspection points by stop; 403 for a route of another robot; empty without the module `substation` ([substation](substation.md#robot-protocol)) |
+| POST | `/api/v1/robot/inspections` | Multipart `meta` (JSON with `uid` and `point_id`) and the images `thermal`, `visual`, `acoustic` → 201 `{id, created, priority}`; idempotent on `uid`. Without the module `substation`: 202 `{id: 0, created: false, dropped}`, nothing kept |
 
 ### GPS in telemetry
 
