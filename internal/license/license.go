@@ -10,6 +10,7 @@ package license
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,9 @@ import (
 
 // Prefix starts every license text.
 const Prefix = "NETRA-LIC-1."
+
+// Product is the product a NETRA license is for; a license for another product is refused.
+const Product = "netra"
 
 // Grace is how long the modules keep working after a license expires.
 const Grace = 14 * 24 * time.Hour
@@ -52,6 +56,31 @@ var Catalog = []struct{ ID, Description string }{
 	{MultiSite, "On-premise sites synchronised to a central NETRA"},
 }
 
+// Map modes: the kind of map a deployment draws its robots on. The license fixes it; the
+// dashboard cannot change it.
+const (
+	MapFloorPlan = "floorplan" // an indoor floor plan (SVG, PNG, JPG, PDF) calibrated to the robot map
+	MapPGM       = "pgm"       // the robot's own occupancy grid (map.yaml + map.pgm), aligned by its origin
+	MapGPS       = "gps"       // outdoor: a basemap in latitude and longitude, robots by GPS or georeference
+)
+
+// MapModes lists the map modes in display order.
+var MapModes = []string{MapFloorPlan, MapPGM, MapGPS}
+
+// EditionMaps is the map mode of an edition when the license does not name one.
+var EditionMaps = map[string]string{"mall": MapFloorPlan, "substation": MapGPS, "custom": MapFloorPlan}
+
+// DefaultMap returns the map mode of an edition (floorplan for an unknown one).
+func DefaultMap(edition string) string {
+	if m, ok := EditionMaps[edition]; ok {
+		return m
+	}
+	return MapFloorPlan
+}
+
+// ValidMap reports whether m is a map mode.
+func ValidMap(m string) bool { return slices.Contains(MapModes, m) }
+
 // Editions add the modules of a product line; tiers add the premium modules.
 var (
 	Editions = map[string][]string{
@@ -76,15 +105,27 @@ type Branding struct {
 
 // License is the signed payload.
 type License struct {
-	ID        string    `json:"id"`
-	Client    string    `json:"client"`
-	Edition   string    `json:"edition"`
-	Tier      string    `json:"tier"`
-	Features  []string  `json:"features"`
-	MaxRobots int       `json:"max_robots"` // 0: no limit
-	IssuedAt  time.Time `json:"issued_at"`
-	ExpiresAt time.Time `json:"expires_at"`
-	Branding  Branding  `json:"branding"`
+	Product   string   `json:"product,omitempty"` // "netra"; empty in licenses from before products
+	ID        string   `json:"id"`
+	Client    string   `json:"client"`
+	Edition   string   `json:"edition"`
+	Tier      string   `json:"tier"`
+	Features  []string `json:"features"`
+	Map       string   `json:"map,omitempty"` // map mode; empty: the edition's
+	MaxRobots int      `json:"max_robots"`    // 0: no limit
+	// Installation binds the license to one server (its installation ID); empty: any server.
+	Installation string    `json:"installation,omitempty"`
+	IssuedAt     time.Time `json:"issued_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	Branding     Branding  `json:"branding"`
+}
+
+// MapMode is the license's map mode, or its edition's when it names none.
+func (l License) MapMode() string {
+	if ValidMap(l.Map) {
+		return l.Map
+	}
+	return DefaultMap(l.Edition)
 }
 
 // Status of a license at a moment.
@@ -173,7 +214,44 @@ func Verify(text string, keys []ed25519.PublicKey) (License, error) {
 	if err := json.Unmarshal(payload, &l); err != nil {
 		return l, fmt.Errorf("license payload: %w", err)
 	}
+	if l.Product != "" && l.Product != Product {
+		return l, fmt.Errorf("license is for the product %q, not %s", l.Product, Product)
+	}
 	return l, nil
+}
+
+// ErrInstallation means the license is bound to another server.
+var ErrInstallation = errors.New("license is for another installation")
+
+// crockford is Crockford's base32 alphabet: no I, L, O or U, so an ID reads well over the phone.
+const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// NewInstallationID returns a random installation ID such as NETRA-7KQ3-M9XD-2WPA (60 bits).
+func NewInstallationID() string {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // crypto/rand does not fail on supported platforms
+	}
+	var sb strings.Builder
+	sb.WriteString("NETRA")
+	for i, v := range b {
+		if i%4 == 0 {
+			sb.WriteByte('-')
+		}
+		sb.WriteByte(crockford[int(v)%len(crockford)])
+	}
+	return sb.String()
+}
+
+// NormalizeInstallation upper-cases an installation ID and maps the look-alike letters
+// (I, L to 1; O to 0) so a typed ID matches the one shown.
+func NormalizeInstallation(id string) string {
+	id = strings.ToUpper(strings.TrimSpace(id))
+	head, rest, ok := strings.Cut(id, "-")
+	if !ok {
+		return id
+	}
+	return head + "-" + strings.NewReplacer("I", "1", "L", "1", "O", "0").Replace(rest)
 }
 
 // StatusAt tells whether l is valid, in its grace period or expired at now.

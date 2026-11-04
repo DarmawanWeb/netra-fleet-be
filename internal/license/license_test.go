@@ -93,7 +93,7 @@ func TestFeaturesFromEditionAndTier(t *testing.T) {
 func TestStatusAndGrace(t *testing.T) {
 	pub, priv := keyPair(t)
 	text, _ := Sign(sample(Substation, Audit), priv)
-	s := NewState([]ed25519.PublicKey{pub})
+	s := NewState([]ed25519.PublicKey{pub}, "NETRA-AAAA-BBBB-CCCC")
 	if s.Status() != Missing || s.Has(Substation) || len(s.Features()) != 0 {
 		t.Fatal("no license must mean core only")
 	}
@@ -124,7 +124,7 @@ func TestStatusAndGrace(t *testing.T) {
 func TestApplyKeepsTheCurrentLicenseOnRefusal(t *testing.T) {
 	pub, priv := keyPair(t)
 	_, stranger := keyPair(t)
-	s := NewState([]ed25519.PublicKey{pub})
+	s := NewState([]ed25519.PublicKey{pub}, "NETRA-AAAA-BBBB-CCCC")
 	s.now = func() time.Time { return sample().IssuedAt }
 	current, _ := Sign(sample(Substation), priv)
 	if _, err := s.Apply(current, "file"); err != nil {
@@ -147,7 +147,7 @@ func TestApplyKeepsTheCurrentLicenseOnRefusal(t *testing.T) {
 
 func TestLoadPicksTheNewest(t *testing.T) {
 	pub, priv := keyPair(t)
-	s := NewState([]ed25519.PublicKey{pub})
+	s := NewState([]ed25519.PublicKey{pub}, "NETRA-AAAA-BBBB-CCCC")
 	s.now = func() time.Time { return sample().IssuedAt }
 	old, _ := Sign(sample(Substation), priv)
 	newer := sample(Substation, Telegram)
@@ -175,5 +175,93 @@ func TestKeyText(t *testing.T) {
 	}
 	if _, err := ParsePrivateKey("bm90IGEga2V5"); err == nil {
 		t.Fatal("short private key accepted")
+	}
+}
+
+func TestMapModes(t *testing.T) {
+	cases := []struct {
+		edition, mapMode, want string
+	}{
+		{"mall", "", MapFloorPlan},
+		{"substation", "", MapGPS},
+		{"custom", "", MapFloorPlan},
+		{"substation", MapPGM, MapPGM},
+		{"mall", "satellite", MapFloorPlan}, // unknown: the edition's
+		{"unknown", "", MapFloorPlan},
+	}
+	for _, c := range cases {
+		if got := (License{Edition: c.edition, Map: c.mapMode}).MapMode(); got != c.want {
+			t.Errorf("%s/%q: %s, want %s", c.edition, c.mapMode, got, c.want)
+		}
+	}
+	if NewState(nil, "").MapMode() != MapFloorPlan || (*State)(nil).MapMode() != MapFloorPlan {
+		t.Fatal("no license must mean the floor plan")
+	}
+}
+
+func TestOtherProductIsRefused(t *testing.T) {
+	pub, priv := keyPair(t)
+	l := sample(Substation)
+	l.Product = "molly"
+	text, _ := Sign(l, priv)
+	if _, err := Verify(text, []ed25519.PublicKey{pub}); err == nil || !strings.Contains(err.Error(), "molly") {
+		t.Fatalf("another product's license accepted: %v", err)
+	}
+	l.Product = Product
+	text, _ = Sign(l, priv)
+	if _, err := Verify(text, []ed25519.PublicKey{pub}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstallationBinding(t *testing.T) {
+	pub, priv := keyPair(t)
+	bound := sample(Substation)
+	bound.Installation = "NETRA-AAAA-BBBB-CCCC"
+	text, _ := Sign(bound, priv)
+
+	here := NewState([]ed25519.PublicKey{pub}, "netra-aaaa-bbbb-cccc") // typed in lower case
+	if _, err := here.Apply(text, "upload"); err != nil {
+		t.Fatalf("bound license refused on its own server: %v", err)
+	}
+	if !here.Has(Substation) || here.Info().Installation != "NETRA-AAAA-BBBB-CCCC" {
+		t.Fatalf("info %+v", here.Info())
+	}
+
+	elsewhere := NewState([]ed25519.PublicKey{pub}, "NETRA-ZZZZ-ZZZZ-ZZZZ")
+	if _, err := elsewhere.Apply(text, "upload"); !errors.Is(err, ErrInstallation) {
+		t.Fatalf("bound license applied on another server: %v", err)
+	}
+	if _, err := elsewhere.Check(text); !errors.Is(err, ErrInstallation) {
+		t.Fatalf("check: %v", err)
+	}
+	elsewhere.Load(Candidate{text, "file"})
+	if elsewhere.Status() != Invalid || elsewhere.Has(Substation) {
+		t.Fatalf("load on another server: %+v", elsewhere.Info())
+	}
+
+	unbound, _ := Sign(sample(Substation), priv)
+	if _, err := elsewhere.Apply(unbound, "upload"); err != nil {
+		t.Fatalf("unbound license refused: %v", err)
+	}
+}
+
+func TestInstallationIDs(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		id := NewInstallationID()
+		if len(id) != len("NETRA-XXXX-XXXX-XXXX") || !strings.HasPrefix(id, "NETRA-") || strings.ContainsAny(id[6:], "ILOU") {
+			t.Fatalf("bad id %q", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate %q", id)
+		}
+		seen[id] = true
+		if NormalizeInstallation(strings.ToLower(id)) != id {
+			t.Fatalf("normalize %q", id)
+		}
+	}
+	if got := NormalizeInstallation(" netra-0ol1-abcd-efgh "); got != "NETRA-0011-ABCD-EFGH" {
+		t.Fatalf("look-alikes: %q", got)
 	}
 }
