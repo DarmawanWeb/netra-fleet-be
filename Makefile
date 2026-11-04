@@ -1,4 +1,4 @@
-.PHONY: run run-licensed dev-license license-manager test lint build netra ai-test docker smoke smoke-unlicensed
+.PHONY: run run-licensed dev-license license-manager test lint build netra ai-test docker smoke smoke-unlicensed smoke-substation
 
 # Development license (.dev/, ignored by git): a local key trusted only by run-licensed builds.
 DEV ?= .dev
@@ -54,3 +54,6 @@ smoke:          ## end-to-end check against a server from run-licensed (NETRA_UR
 
 smoke-unlicensed: ## checks against a server from run (core only)
 	python3 scripts/smoke_unlicensed.py
+
+smoke-substation: ## substation inspection end to end against a server from run-licensed
+	python3 scripts/smoke_substation.py

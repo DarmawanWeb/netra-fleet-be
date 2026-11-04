@@ -59,6 +59,8 @@ jobs:
           sleep 3
           pip install requests websocket-client
           NETRA_PASSWORD=admin python3 scripts/smoke_test.py
+          # Substation inspection: assets, points, robot inspections, NETA priorities, findings.
+          NETRA_PASSWORD=admin python3 scripts/smoke_substation.py
           kill $licensed
           # The release build without a license: core only, one robot.
           go build -o netra-api ./cmd/netra-api
