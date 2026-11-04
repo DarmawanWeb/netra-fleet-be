@@ -88,6 +88,23 @@ make lint   # go vet, golangci-lint run, ruff check and ruff format --check in a
 [`ai/pyproject.toml`](../ai/pyproject.toml): line length 110, target Python 3.11, rules `E`, `F`,
 `I`, `B`, `UP`, `SIM`, `D` without `D100`, `D104`, `D203`, `D213`.
 
+## The single application
+
+`netra` is the service with the dashboard inside, as the installers ship it:
+
+```bash
+cd ../netra-fleet-fe && npm run build                     # the export in out/
+cd ../netra-fleet-be && rm -rf internal/web/dist && cp -r ../netra-fleet-fe/out internal/web/dist
+go build -tags webui -o bin/netra ./cmd/netra
+NETRA_PG_BIN=/usr/lib/postgresql/16/bin NETRA_DATA_DIR=/tmp/netra bin/netra serve   # not as root
+```
+
+Open <http://localhost:8080>: a new installation opens the setup wizard. `internal/web/dist` is
+ignored by git. Without `-tags webui`, the binary serves only the API (or `NETRA_WEB_DIR`).
+
+The private-database test needs PostgreSQL binaries and a regular user:
+`NETRA_TEST_PG_BIN=/usr/lib/postgresql/16/bin go test ./internal/pgmanaged`.
+
 ## End-to-end smoke test
 
 [`scripts/smoke_test.py`](../scripts/smoke_test.py) drives a running `netra-api` as an admin, a

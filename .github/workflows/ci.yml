@@ -33,6 +33,13 @@ jobs:
         with:
           version: v1.61
       - run: go test -race ./...
+      - name: the single application builds for every installer
+        run: |
+          mkdir -p internal/web/dist && echo '<!doctype html>' > internal/web/dist/index.html
+          go vet -tags webui ./...
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build -tags webui -o /dev/null ./cmd/netra
+          done
       - name: end-to-end smoke test
         env:
           NETRA_ADMIN_PASSWORD: admin

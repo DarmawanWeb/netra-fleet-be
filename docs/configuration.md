@@ -31,6 +31,20 @@ code reads the environment. An empty value counts as unset, so the default appli
 | `NETRA_EXT_TOKEN_MINUTES` | `60` | Lifetime of integration API access tokens in minutes; a value that is not an integer or lies outside 5 to 1440 gives 60 | |
 | `NETRA_LICENSE_FILE` | empty | Path of the signed license (`NETRA-LIC-1...`) read at start. A missing or unreadable file is logged and the other sources apply ([licensing](licensing.md#installing-a-license)) | yes |
 | `NETRA_LICENSE` | empty | The license text itself, instead of a file | |
+| `NETRA_WEB_DIR` | empty | Serve the dashboard export from this directory; empty: the one built into the binary (`-tags webui`), or none | |
+| `NETRA_PG_BIN` | empty | PostgreSQL binaries (initdb, pg_ctl, pg_dump, pg_restore): run the installation's private database in `NETRA_DATA_DIR/pgdata` instead of `NETRA_DATABASE_URL`. Refused as root | |
+| `NETRA_PG_PORT` | `5433` | Port of the private database, on 127.0.0.1 | |
+| `NETRA_OLLAMA_URL` | empty | Ollama base URL for the built-in final detection (used when `NETRA_FINAL_DETECTOR_URL` is empty) | |
+| `NETRA_AI_MODEL` | `qwen2.5vl:7b` | Vision model on Ollama | |
+| `NETRA_AI_LANGUAGE` | `English` | Language of the model's description | |
+| `NETRA_AI_SITE` | `mall` | What the robot patrols, in the prompt (`mall`, `substation`) | |
+| `NETRA_AI_CATEGORIES` | `trash,spill,floor_damage,fallen_person` | Categories offered to the model; must match the rule codes | |
+| `NETRA_AI_MAX_SIDE`, `NETRA_AI_TIMEOUT`, `NETRA_AI_KEEP_ALIVE`, `NETRA_AI_CONCURRENCY` | `1024`, `90`, `1h`, `1` | Longest image side in pixels, seconds before giving up, how long Ollama keeps the model, model calls at once | |
+| `NETRA_BACKUP_KEEP_DAYS` | `14` | Daily database backups in `NETRA_DATA_DIR/backups`, kept this many days; `0` turns them off. Off anyway without `pg_dump` (Docker has its own backup service) | |
+| `NETRA_BACKUP_AT` | `02:30` | Local time (`NETRA_TZ`) of the daily backup | |
+| `NETRA_TLS` | empty | `self-signed`: HTTPS with a certificate made in `NETRA_DATA_DIR/tls` for this computer's names and addresses; empty or `off`: plain HTTP | |
+| `NETRA_TLS_CERT`, `NETRA_TLS_KEY` | empty | HTTPS with this certificate and key (PEM) | |
+| `NETRA_TLS_HOSTS` | empty | Extra names or addresses for the self-signed certificate | |
 
 Without a valid license from `NETRA_LICENSE_FILE`, `NETRA_LICENSE` or the dashboard upload, the
 server runs the core only with one robot. No variable turns a module on: only a license signed by a
