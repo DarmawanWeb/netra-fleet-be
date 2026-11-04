@@ -426,6 +426,20 @@ clients, their tokens, and the change feed column on `anomalies`.
 - Index `anomalies_updated (updated_at, id)` serves the feed's keyset condition
   `(updated_at, id) > (cursor)` ([`feed.go`](../internal/store/feed.go)).
 
+### 006_license.sql
+
+[`006_license.sql`](../internal/store/migrations/006_license.sql) keeps the license uploaded in the
+dashboard ([licensing](licensing.md#installing-a-license)).
+
+**`license`**, one row
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `SMALLINT` | Primary key, default 1, `CHECK (id = 1)` |
+| `text` | `TEXT` | Not null; the signed license `NETRA-LIC-1...`, verified again at every start |
+| `uploaded_by` | `TEXT` | Not null, default `''`; username |
+| `uploaded_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
 ## Retention
 
 - With TimescaleDB, `telemetry` rows older than 180 days are dropped and chunks older than 7 days

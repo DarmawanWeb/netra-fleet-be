@@ -8,6 +8,7 @@ the patrol command center for Pashupati robots.
 | [Architecture](architecture.md) | Components, package map, request and robot connection lifecycles, anomaly pipeline, patrols and scheduler, crowd, reports, metrics |
 | [Dashboard API](api.md) | Every `/api/v1` route with its permission, authentication, errors, the live WebSocket feed, robot endpoints |
 | [Database](database.md) | How migrations are applied, each migration in order, table overview, files outside the database |
+| [Licensing](licensing.md) | Editions, tiers and feature modules, the signed license, the signing key, issuing and installing licenses, expiry and the robot limit |
 | [Configuration](configuration.md) | Environment variables of `netra-api`, `netra-ai` and the smoke test |
 | [Development](development.md) | Local setup, tests, lint, smoke test, CI, git hooks, commit convention, adding endpoints and migrations, releases |
 | [AI service](ai-service.md) | The `netra-ai` final-detection service: endpoints, prompt and answer handling, metrics, tests, image |

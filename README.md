@@ -32,6 +32,10 @@ in its [robot API](https://github.com/DarmawanRobotics/Pashupati/blob/main/src/r
 
 ## Features
 
+One image for every client: a signed license decides the edition (mall, substation), the tier
+(basic, pro, enterprise), the modules, the robot limit and the branding
+([licensing](docs/licensing.md)). The core runs without one.
+
 **Robots**
 - A token per robot, live state over WebSocket, telemetry history (5 s samples) for track replay
   and battery, load and people charts.
@@ -116,6 +120,7 @@ instead ([INTEGRATION.md](INTEGRATION.md)).
 | [Architecture](docs/architecture.md) | Components, package map, request and robot lifecycles, anomaly pipeline, patrols and scheduler, crowd, reports, metrics |
 | [Dashboard API](docs/api.md) | Every `/api/v1` route with its permission, authentication, errors, the live WebSocket, robot endpoints |
 | [Database](docs/database.md) | How migrations are applied, each migration in order, the tables |
+| [Licensing](docs/licensing.md) | Editions, tiers and modules, the signed license, issuing and installing one |
 | [Configuration](docs/configuration.md) | Environment variables of `netra-api`, `netra-ai` and the smoke test |
 | [Development](docs/development.md) | Local setup, tests, lint, smoke test, CI, hooks, adding endpoints and migrations, releases |
 | [AI service](docs/ai-service.md) | `netra-ai`: endpoints, prompt and answer handling, metrics, tests, image |
