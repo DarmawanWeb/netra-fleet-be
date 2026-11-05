@@ -53,10 +53,10 @@ func fakeRobot(t *testing.T, s *Server, id string, reply func(name string, args 
 }
 
 func controlServer() *Server {
-	return &Server{
+	return withRelay(&Server{
 		hub: hub.New(), pending: map[string]pendingCommand{},
 		cfg: config.Config{InspectionModels: []string{"qwen3-vl:2b-instruct", "moondream:latest"}},
-	}
+	})
 }
 
 func post(s *Server, h http.HandlerFunc, path, body string) *httptest.ResponseRecorder {
@@ -131,5 +131,27 @@ func TestControlValidation(t *testing.T) {
 		if rec := post(s, c.h, "/x", c.body); rec.Code != c.want {
 			t.Errorf("%s: status %d, want %d (%s)", c.body, rec.Code, c.want, rec.Body.String())
 		}
+	}
+}
+
+func TestGatewayReportsItsRobots(t *testing.T) {
+	s := controlServer()
+	s.skew = map[string]time.Duration{}
+	stop := fakeRobot(t, s, "l1w-01", func(string, map[string]any) (bool, string, bool) { return true, "", true })
+	defer stop()
+	now := time.Now()
+	s.noteClock("l1w-01", unix(now.Add(-time.Hour)), now)
+	robots := gateway{s}.Robots()
+	if len(robots) != 1 || robots[0].ID != "l1w-01" || robots[0].SkewS == nil || *robots[0].SkewS < 3599 {
+		t.Fatalf("robots %+v", robots)
+	}
+	if !s.relay.Online("l1w-01") || s.relay.Online("x30-01") || s.relay.OnlineCount() != 1 {
+		t.Fatal("presence of the in-process relay")
+	}
+	if skew := skewSeconds(s.relay.ClockSkew("l1w-01")); skew == nil || *skew != 3600 {
+		t.Fatalf("clock skew %v", skew)
+	}
+	if _, err := s.sendCommand(context.Background(), "l1w-01", "pause", nil, 0); err != nil {
+		t.Fatal(err)
 	}
 }

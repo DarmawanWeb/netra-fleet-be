@@ -21,6 +21,8 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/notify"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/role"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 	"github.com/gorilla/websocket"
 )
@@ -36,7 +38,9 @@ const (
 type Server struct {
 	cfg      config.Config
 	store    *store.Store
-	hub      *hub.Hub
+	hub      *hub.Hub    // the WebSockets of this process: dashboards (api), robots (gateway)
+	relay    relay.Relay // reaches the other roles: in this process, or over NATS
+	roles    role.Set    // the routes Handler serves
 	telegram *notify.Telegram
 	detector detect.Detector
 	bus      *bus.Publisher
@@ -57,27 +61,66 @@ type Server struct {
 type pendingCommand struct {
 	patrolID int64
 	name     string
-	done     chan ackResult // set when an HTTP request waits for the robot's answer
+	ack      func(relay.Ack) // set when the sender waits for the robot's answer
 }
 
-// New wires a server. lic decides the feature modules (nil: core only).
+// New wires a server. lic decides the feature modules (nil: core only). It relays between its
+// own parts until SetRelay gives it another relay.
 func New(cfg config.Config, st *store.Store, h *hub.Hub, tg *notify.Telegram, det detect.Detector, b *bus.Publisher,
 	lic *license.State) *Server {
-	return &Server{
+	s := &Server{
 		cfg: cfg, store: st, hub: h, telegram: tg, detector: det, bus: b, lic: lic, limiter: newLoginLimiter(),
+		roles:    role.All,
 		lastLog:  map[string]time.Time{},
 		skew:     map[string]time.Duration{},
 		upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
 		wake:     make(chan struct{}, 1),
 		pending:  map[string]pendingCommand{},
 	}
+	s.relay = relay.NewLocal(s.Handlers())
+	return s
 }
 
-// Handler returns the routed HTTP handler.
+// Handlers are this server's ends of the relay: its dashboards, its robots, its pipeline and
+// its alerts.
+func (s *Server) Handlers() relay.Handlers {
+	return relay.Handlers{
+		Dashboards: func(msg []byte) { s.hub.BroadcastRaw(msg) },
+		Gateway:    gateway{s},
+		Wake:       s.wakePipeline,
+		Alert:      s.runAlert,
+	}
+}
+
+// SetRelay makes the server reach the other roles through r.
+func (s *Server) SetRelay(r relay.Relay) { s.relay = r }
+
+// SetRoles limits the server to some roles: the api routes, the robot routes (gateway), or
+// neither (worker). New gives it every role.
+func (s *Server) SetRoles(r role.Set) { s.roles = r }
+
+// Handler returns the routed HTTP handler: health and metrics in every role, then the routes of
+// the roles the server runs.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("GET /readyz", s.ready)
+	mux.Handle("GET /metrics", metrics.Default)
+	if s.roles.Has(role.API) {
+		s.dashboardRoutes(mux)
+	}
+	if s.roles.Has(role.Gateway) {
+		s.robotRoutes(mux)
+	}
+	// The dashboard, when this server serves it (the single-application install).
+	if s.web != nil && s.roles.Has(role.API) {
+		mux.Handle("/", s.web)
+	}
+	return metrics.Middleware(mux, s.cors(mux))
+}
+
+// dashboardRoutes are the api role: dashboard REST and WebSocket, integration API.
+func (s *Server) dashboardRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 
 	mux.HandleFunc("GET /api/v1/setup", s.setupState)
@@ -214,11 +257,13 @@ func (s *Server) Handler() http.Handler {
 	module(license.Integration, auth.PermUsers, "DELETE /api/v1/api-clients/{id}", s.deleteClient)
 	if s.store != nil {
 		extMux := http.NewServeMux()
-		ext.New(s.cfg, s.store, s.hub.Online).Register(extMux)
+		ext.New(s.cfg, s.store, func(id string) bool { return s.relay.Online(id) }).Register(extMux)
 		mux.Handle("/api/ext/", s.feature(license.Integration, extMux))
 	}
-	mux.Handle("GET /metrics", metrics.Default)
+}
 
+// robotRoutes are the gateway role: the robot WebSocket and uploads.
+func (s *Server) robotRoutes(mux *http.ServeMux) {
 	robot := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.requireRobot(h)) }
 	robot("GET /api/v1/robot/ws", s.robotWS)
 	robot("POST /api/v1/robot/anomalies", s.robotAnomaly)
@@ -226,12 +271,6 @@ func (s *Server) Handler() http.Handler {
 	robot("GET /api/v1/robot/routes/{id}/file", s.routeFile)
 	robot("GET /api/v1/robot/routes/{id}/inspection", s.robotInspectionPlan)
 	robot("POST /api/v1/robot/inspections", s.robotInspectionUpload)
-
-	// The dashboard, when this server serves it (the single-application install).
-	if s.web != nil {
-		mux.Handle("/", s.web)
-	}
-	return metrics.Middleware(mux, s.cors(mux))
 }
 
 // SetWeb makes the server serve the dashboard files for every path no API route takes.
@@ -328,6 +367,10 @@ func clientIP(r *http.Request) string {
 
 func (s *Server) requireRobot(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.store == nil { // unit tests without a database: no robot is known
+			writeError(w, http.StatusUnauthorized, "unknown robot token")
+			return
+		}
 		robot, err := s.store.RobotByToken(r.Context(), auth.HashToken(bearer(r)))
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unknown robot token")

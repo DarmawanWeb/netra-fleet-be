@@ -161,7 +161,8 @@ func (s *Server) putLicense(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.hub.Broadcast(map[string]any{"type": "license", "license": s.lic.Info()})
+	s.relay.LicenseChanged()
+	s.relay.Broadcast(map[string]any{"type": "license", "license": s.lic.Info()})
 	writeJSON(w, http.StatusOK, s.lic.Info())
 }
 

@@ -621,6 +621,6 @@ func (s *Server) changeFinding(resolve bool) http.HandlerFunc {
 
 // broadcastFinding tells dashboards that a finding changed.
 func (s *Server) broadcastFinding(f store.Finding, event string) {
-	s.hub.Broadcast(map[string]any{"type": "finding", "id": f.ID, "event": event, "status": f.Status,
+	s.relay.Broadcast(map[string]any{"type": "finding", "id": f.ID, "event": event, "status": f.Status,
 		"priority": f.Priority, "last_priority": f.LastPriority, "point_id": f.PointID, "asset_id": f.AssetID})
 }

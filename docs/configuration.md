@@ -17,7 +17,8 @@ code reads the environment. An empty value counts as unset, so the default appli
 | `NETRA_DATA_DIR` | `./data` (the Docker image sets `/data`) | Directory for anomaly photos and floor-plan files; the paths are stored in the database ([database](database.md#files-outside-the-database)) | yes |
 | `NETRA_PUBLIC_URL` | empty | Public base URL: returned as `public_url` by `GET /api/v1/info` (the address robots connect to) and used for the `<url>/anomalies/<id>` link in Telegram captions | yes |
 | `NETRA_ALLOWED_ORIGIN` | `*` | Value of `Access-Control-Allow-Origin` | yes |
-| `NETRA_NATS_URL` | empty | `nats://[user:pass@]host:port` for domain events; empty disables publishing | yes |
+| `NETRA_NATS_URL` | empty | `nats://[user:pass@]host[:port]` (or `nats://token@host`; port 4222 by default, no TLS): the domain events, and the messages between the processes of a split installation. Empty disables publishing; with every role in one process an invalid URL is logged and disables it too | yes |
+| `NETRA_ROLES` | `all` | The process roles ([architecture](architecture.md#process-roles-and-split-installations)): `all`, or a comma list of `api` (dashboard and integration API), `gateway` (robot WebSocket and uploads) and `worker` (pipeline, scheduler, backups, Telegram). Anything but `all` needs `NETRA_NATS_URL` and refuses `NETRA_PG_BIN`. `netra serve -roles` and `netra-api -roles` override it | |
 | `NETRA_FINAL_DETECTOR_URL` | empty | Full URL of the `netra-ai` detect endpoint (`.env.example`: `http://localhost:8090/detect`); empty makes the robot's own result final | yes |
 | `NETRA_TZ` | `Asia/Jakarta` | IANA time zone for schedules, crowd buckets, times in reports and Telegram captions, `timezone` in `/me` and `time_zone` in `/info`; an unknown zone falls back to UTC. The zone database is compiled in (`time/tzdata`) | |
 | `NETRA_ADMIN_USER` | `admin` | Username of the bootstrap admin | |
@@ -53,6 +54,11 @@ key built into the binary does ([licensing](licensing.md)).
 `NETRA_PUBLIC_URL` serves both the robots (API address) and the Telegram links (dashboard page
 `/anomalies/<id>`), so it assumes the dashboard and the API are reachable under the same origin.
 
+In a split installation give every process the same configuration apart from `NETRA_ROLES` and
+`NETRA_ADDR`: one database, one shared `NETRA_DATA_DIR`, the same license and NATS. A process
+ignores the settings of roles it does not run: the Telegram, final-detection and `NETRA_AI_*`
+settings matter to the worker, the bootstrap admin and `NETRA_WEB_DIR` to api processes.
+
 ## netra-ai
 
 Read at import time by [`main.py`](../ai/netra_ai/main.py). Unlike `netra-api`, an empty value is
@@ -74,12 +80,14 @@ used as given, and a value that is not a number makes the numeric settings fail 
 
 ## Smoke test
 
-Read by [`scripts/smoke_test.py`](../scripts/smoke_test.py) and
+Read by [`scripts/smoke_test.py`](../scripts/smoke_test.py),
+[`scripts/smoke_substation.py`](../scripts/smoke_substation.py) and
 [`scripts/smoke_unlicensed.py`](../scripts/smoke_unlicensed.py)
 ([development](development.md#end-to-end-smoke-test)):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `NETRA_URL` | `http://localhost:8080` | Base URL of the running `netra-api` |
+| `NETRA_URL` | `http://localhost:8080` | Base URL of the running `netra-api` (the `api` process of a split installation) |
+| `NETRA_ROBOT_URL` | `NETRA_URL` | Base URL of the simulated robot's calls (`/api/v1/robot/...`): the `gateway` process of a split installation |
 | `NETRA_USER` | `admin` | Admin username |
 | `NETRA_PASSWORD` | `admin` | Admin password |

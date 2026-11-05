@@ -14,6 +14,7 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/auth"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
@@ -55,7 +56,7 @@ func (s *Server) listRobots(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]robotView, len(robots))
 	for i, rb := range robots {
-		out[i] = robotView{Robot: rb, Online: s.hub.Online(rb.ID), ClockSkewS: s.clockSkew(rb.ID)}
+		out[i] = robotView{Robot: rb, Online: s.relay.Online(rb.ID), ClockSkewS: skewSeconds(s.relay.ClockSkew(rb.ID))}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -143,7 +144,7 @@ func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name must be pause, resume, localize, stop_patrol, estop or estop_release")
 		return
 	}
-	id, err := s.sendCommand(r.PathValue("id"), body.Name, body.Args, 0)
+	id, err := s.sendCommand(r.Context(), r.PathValue("id"), body.Name, body.Args, 0)
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -307,7 +308,7 @@ func (s *Server) stopPatrol(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if _, err := s.sendCommand(patrol.RobotID, "stop_patrol", nil, id); err != nil {
+	if _, err := s.sendCommand(r.Context(), patrol.RobotID, "stop_patrol", nil, id); err != nil {
 		_ = s.store.PatrolStatus(r.Context(), id, "stopped", "robot offline")
 	}
 	w.WriteHeader(http.StatusAccepted)
@@ -376,9 +377,9 @@ func (s *Server) validateAnomaly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status == "confirmed" {
-		go s.notifyConfirmed(id)
+		s.relay.Alert(relay.Alert{Kind: relay.AlertAnomaly, ID: id})
 	}
-	s.hub.Broadcast(map[string]any{"type": "anomaly", "id": id, "status": status})
+	s.relay.Broadcast(map[string]any{"type": "anomaly", "id": id, "status": status})
 	w.WriteHeader(http.StatusNoContent)
 }
 

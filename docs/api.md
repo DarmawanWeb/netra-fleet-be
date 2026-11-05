@@ -85,7 +85,7 @@ file missing on disk gets a plain-text 404.
 | Method | Path | Permission | What it does |
 |---|---|---|---|
 | GET | `/healthz` | none | `{"status": "ok"}` while the process serves HTTP (no database check) |
-| GET | `/readyz` | none | `{"status": "ready", "version"}` when the database answers too, else 503 |
+| GET | `/readyz` | none | `{"status": "ready", "version"}` when the database answers too (and NATS in a split installation), else 503 with `database unavailable` or `nats unavailable` |
 | GET | `/api/v1/info` | view | → `{public_url, time_zone, version, installation_id, edition, tier, features, map_mode, robot_limit, license, branding}`: `NETRA_PUBLIC_URL` (the address robots connect to), `NETRA_TZ`, the build version, this server's installation ID, the licensed modules in force, the map mode (`floorplan`, `pgm` or `gps`), the robot limit (0: none) and the license and branding as below |
 | GET | `/api/v1/setup` | none | → `{required, installation_id, version, license}`: `required` while no user exists (a new installation); the dashboard then opens the setup wizard |
 | POST | `/api/v1/setup` | none | Only while `required`. `{username, display_name, password, license}` (`license` optional) → 201 like a login, plus `license`: creates the first administrator, installs the license; 400 for a bad username, password or license (nothing is created), 409 once a user exists |
@@ -599,7 +599,10 @@ Robots authenticate with their robot token (`Authorization: Bearer <token>`, or 
 send `X-Robot-Id`, which must match the token's robot. The full protocol (message fields, command
 semantics, upload metadata) is in the
 [Pashupati robot API](https://github.com/DarmawanRobotics/Pashupati/blob/main/src/robot_fleet/API.md);
-the server side is described in [architecture](architecture.md#robot-connection-lifecycle).
+the server side is described in [architecture](architecture.md#robot-connection-lifecycle). In a
+split installation these routes are served by the `gateway` processes and the others by the `api`
+processes ([process roles](architecture.md#process-roles-and-split-installations)); `/healthz`,
+`/readyz` and `/metrics` by every process.
 
 | Method | Path | What it does |
 |---|---|---|

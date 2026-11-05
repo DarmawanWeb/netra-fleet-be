@@ -3,6 +3,8 @@ package api
 import (
 	"testing"
 	"time"
+
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 )
 
 func newClockServer() *Server { return &Server{skew: map[string]time.Duration{}} }
@@ -50,5 +52,40 @@ func TestRobotTimeWithoutTelemetryOrTimestamp(t *testing.T) {
 	s.noteClock("unknown", 0, time.Now()) // telemetry without ts must not record a skew
 	if s.clockSkew("unknown") != nil {
 		t.Fatal("telemetry without a timestamp recorded a skew")
+	}
+}
+
+func TestNoteClockReportsNewOffsets(t *testing.T) {
+	s := newClockServer()
+	now := time.Now()
+	if !s.noteClock("l1w-01", unix(now), now) {
+		t.Fatal("first offset not reported")
+	}
+	later := now.Add(time.Second)
+	if s.noteClock("l1w-01", unix(later), later.Add(300*time.Millisecond)) {
+		t.Fatal("latency jitter reported as a new offset")
+	}
+	if !s.noteClock("l1w-01", unix(later.Add(-2*time.Hour)), later) {
+		t.Fatal("a clock jump not reported")
+	}
+	if s.noteClock("l1w-01", 0, later) {
+		t.Fatal("telemetry without ts reported")
+	}
+}
+
+// otherGateway reports the offset another gateway measured; only ClockSkew is called.
+type otherGateway struct {
+	relay.Gateway
+	skew time.Duration
+}
+
+func (g otherGateway) ClockSkew(string) (time.Duration, bool) { return g.skew, true }
+
+func TestRobotTimeUsesTheOffsetOfAnotherGateway(t *testing.T) {
+	s := newClockServer()
+	s.relay = relay.NewLocal(relay.Handlers{Gateway: otherGateway{skew: time.Hour}})
+	ts := time.Now().Add(-time.Hour) // the robot clock is an hour behind; its telemetry went elsewhere
+	if got := s.robotTime("l1w-01", unix(ts)); time.Since(got).Abs() > time.Second {
+		t.Fatalf("robotTime = %v, want about now", got)
 	}
 }

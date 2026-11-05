@@ -88,7 +88,7 @@ One image for every client: a signed license decides the edition (mall, substati
 
 | Service | Source | Stack | |
 |---|---|---|---|
-| `netra-api` | `cmd/`, `internal/` | Go 1.22, PostgreSQL / TimescaleDB, NATS | REST and WebSocket API, robot gateway, scheduler, anomaly pipeline, reports, integration API |
+| `netra-api` | `cmd/`, `internal/` | Go 1.22, PostgreSQL / TimescaleDB, NATS | REST and WebSocket API, robot gateway, scheduler, anomaly pipeline, reports, integration API; one process, or `api`, `gateway` and `worker` processes over NATS (`NETRA_ROLES`, [architecture](docs/architecture.md#process-roles-and-split-installations)) |
 | `netra-ai` | `ai/` | Python 3.12, FastAPI, Ollama | Final anomaly detection with a larger vision-language model |
 
 ## API

@@ -12,6 +12,7 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/i18n"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
@@ -73,7 +74,7 @@ func (s *Server) process(ctx context.Context, a store.Anomaly) {
 		slog.Error("save final detection", "err", err)
 		return
 	}
-	s.hub.Broadcast(map[string]any{"type": "anomaly", "robot_id": a.RobotID, "id": a.ID, "status": status,
+	s.relay.Broadcast(map[string]any{"type": "anomaly", "robot_id": a.RobotID, "id": a.ID, "status": status,
 		"category": final.Category})
 	s.bus.Publish("netra.anomaly."+status, map[string]any{"id": a.ID, "robot_id": a.RobotID, "category": final.Category,
 		"confidence": final.Confidence})
@@ -104,7 +105,25 @@ func (s *Server) notifyConfirmed(id int64) {
 		return
 	}
 	_ = s.store.MarkNotified(ctx, a.ID, a.Status)
-	s.hub.Broadcast(map[string]any{"type": "anomaly", "id": a.ID, "status": a.Status, "notified": true})
+	s.relay.Broadcast(map[string]any{"type": "anomaly", "id": a.ID, "status": a.Status, "notified": true})
+}
+
+// wakePipeline makes RunPipeline look for queued anomalies now.
+func (s *Server) wakePipeline() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+// runAlert sends an alert to Telegram: the worker's part of a validation or an upload.
+func (s *Server) runAlert(a relay.Alert) {
+	switch a.Kind {
+	case relay.AlertAnomaly:
+		s.notifyConfirmed(a.ID)
+	case relay.AlertFinding:
+		s.alertFinding(a.ID, a.Inspection, a.Chat)
+	}
 }
 
 func (s *Server) caption(a store.Anomaly, rule store.Rule) string {

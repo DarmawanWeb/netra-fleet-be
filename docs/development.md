@@ -7,7 +7,7 @@
 | Go | 1.22 (`go 1.22.2` in [`go.mod`](../go.mod); CI and the Docker build use 1.22) | `netra-api` |
 | PostgreSQL | CI uses `timescale/timescaledb:latest-pg16` | `netra-api` (required) |
 | TimescaleDB | optional | Hypertables, retention and compression ([database](database.md)) |
-| NATS | optional | Domain events |
+| NATS | optional; 2.2 or later | Domain events; the split smoke run |
 | Python | 3.11 or later (`ai/pyproject.toml`); CI and the image use 3.12 | `netra-ai`, smoke test |
 | Ollama and a vision model | optional | Real final detection |
 | golangci-lint | v1 (CI pins v1.61) | Go lint; v2 refuses the v1 configuration |
@@ -58,24 +58,31 @@ cd ai && python -m pytest -q   # make ai-test
 
 The Go unit tests need no database: handlers are called with `httptest` on a `Server` built without
 a store, robots are simulated over a real WebSocket, and the integration API runs on an in-memory
-fake store.
+fake store. Nor do they need NATS: [`bustest`](../internal/bus/bustest/server.go) is a small
+NATS-like server on a local port (the protocol subset NETRA uses, with queue groups, "no
+responders", a login, dropped connections, restarts and unanswered pings).
 
 | Test | Covers |
 |---|---|
-| [`internal/api/clock_test.go`](../internal/api/clock_test.go) | Clock-skew correction |
+| [`internal/api/clock_test.go`](../internal/api/clock_test.go) | Clock-skew correction, new offsets reported to the relay, the offset another gateway measured |
 | [`internal/api/command_test.go`](../internal/api/command_test.go) | Command names accepted by `POST /robots/{id}/command` |
 | [`internal/api/maps_test.go`](../internal/api/maps_test.go) | Map mode gating of uploads and the georeference with test licenses, basemap and control point validation, robot map upload refusals, overlay bounds, GPS in telemetry |
-| [`internal/api/robotcontrol_test.go`](../internal/api/robotcontrol_test.go) | `set_inspection` and `set_people`: ack, refusal, timeout, validation |
+| [`internal/api/robotcontrol_test.go`](../internal/api/robotcontrol_test.go) | `set_inspection` and `set_people`: ack, refusal, timeout, validation; the gateway's robots and offsets through the in-process relay |
+| [`internal/api/roles_test.go`](../internal/api/roles_test.go) | The routes of each process role: dashboard, robot, dashboard files, health and metrics |
+| [`internal/app/app_test.go`](../internal/app/app_test.go) | Split setups refused at start (unknown roles, no NATS, the private database, a bad URL, a refused NATS login), the relay handlers of each role |
 | [`internal/api/route_test.go`](../internal/api/route_test.go) | Route CSV parsing |
 | [`internal/api/substation_test.go`](../internal/api/substation_test.go) | Substation routes behind the module (exports behind `reports.export` too), the evaluation of thermal and pd uploads, upload checks, the robot plan, the Telegram text of a finding |
 | [`internal/auth/auth_test.go`](../internal/auth/auth_test.go) | Password hashes, token digests, PBKDF2 key derivation vectors |
+| [`internal/bus/client_test.go`](../internal/bus/client_test.go) | The NATS client against `bustest`: publish and subscribe with wildcards, queue groups, request and reply, no responders, unsubscribe, reconnects that subscribe again, a server restart, pings both ways and a hung server, a refused login, the payload limit, messages with headers, the domain-event publisher |
 | [`internal/backup/backup_test.go`](../internal/backup/backup_test.go) | `pg_dump` called with the password in `PGPASSWORD`, not on the command line; retention pruning; listing; refused names |
 | [`internal/detect/ollama_test.go`](../internal/detect/ollama_test.go) | Built-in Ollama detection: answer normalisation, the prompt, downscaling, the request to a test Ollama, an unreachable model |
 | [`internal/ext/ext_test.go`](../internal/ext/ext_test.go) | Token endpoint, lockout, scopes, rate limit, change feed and cursor, photos, routes, OpenAPI and Swagger UI |
 | [`internal/geo/geo_test.go`](../internal/geo/geo_test.go) | Transform round trip and ground distances, least-squares fit recovering a known rotation, scale and translation, residuals, one point with a heading, degenerate input, the antimeridian |
 | [`internal/licensemgr`](../internal/licensemgr/) | License manager: file store round trips, modes and schema check, folder lock, audit tail; key encryption, wrong passphrase, tampering, idle lock; building and validating licenses; HTTP login, CSRF, throttling, and the issue, renew, change and verify flows against `license.Verify` |
 | [`internal/pgmanaged/pgmanaged_test.go`](../internal/pgmanaged/pgmanaged_test.go) | A real private cluster: create, start, reuse by a second process, stop, restart; refused as root. Needs `NETRA_TEST_PG_BIN` and a regular user, else skipped |
+| [`internal/relay`](../internal/relay/) | The in-process relay; the NATS relay between test processes: live messages to every api process, presence with clock offsets, expiry and a new api process asking, commands with and without ack, timeouts and robots without a gateway, the worker's wake-up, alerts taken by one worker, license changes, reconnects |
 | [`internal/report/pdf_test.go`](../internal/report/pdf_test.go), [`xlsx_test.go`](../internal/report/xlsx_test.go) | PDF and XLSX output |
+| [`internal/role/role_test.go`](../internal/role/role_test.go) | `NETRA_ROLES` parsing and refusals |
 | [`internal/rosmap/rosmap_test.go`](../internal/rosmap/rosmap_test.go) | `map.yaml` parsing (nav2 and ROS 1 forms, errors with lines), PGM P5 8/16-bit and P2, PNG, occupancy with negate and the three modes, rendering, the calibration putting map cells on their pixels |
 | [`internal/scheduler/scheduler_test.go`](../internal/scheduler/scheduler_test.go) | `Due` for weekly, one-off and disabled schedules |
 | [`internal/substation/substation_test.go`](../internal/substation/substation_test.go) | The NETA bands at their bounds, similar-component and ambient rises with every reference, rated limits, pd levels, point definition checks |
@@ -179,6 +186,32 @@ What it checks, in order:
 10. Roles: a viewer can read but cannot start a patrol or list users; logout; the audit log holds
     the patrol start and the logins.
 
+### Split installation
+
+The same scripts check a split installation when dashboard calls go to an `api` process and robot
+calls to a `gateway` (`NETRA_ROBOT_URL`), with a worker beside them and a NATS server
+([release binaries](https://github.com/nats-io/nats-server/releases), 2.2 or later):
+
+```bash
+make dev-license
+go build -ldflags "-X github.com/DarmawanWeb/netra-fleet-be/internal/license.BuildKey=$(cat .dev/dev.pub)" \
+  -o bin/netra-api ./cmd/netra-api
+nats-server -a 127.0.0.1 -p 4222 &
+export NETRA_NATS_URL=nats://127.0.0.1:4222 NETRA_LICENSE_FILE=.dev/dev.lic NETRA_ADMIN_PASSWORD=admin \
+  NETRA_FINAL_DETECTOR_URL= NETRA_DATA_DIR=/tmp/netra-split
+NETRA_ROLES=api     NETRA_ADDR=:8080 bin/netra-api &
+NETRA_ROLES=gateway NETRA_ADDR=:8081 bin/netra-api &
+NETRA_ROLES=worker  NETRA_ADDR=:8082 bin/netra-api &
+export NETRA_URL=http://localhost:8080 NETRA_ROBOT_URL=http://localhost:8081 NETRA_PASSWORD=admin
+python3 scripts/smoke_test.py && python3 scripts/smoke_substation.py
+```
+
+The three processes share the database and `NETRA_DATA_DIR`. `smoke_unlicensed.py` (a release
+build) and `smoke_setup.py` (an empty database, no `NETRA_ADMIN_PASSWORD`) take the same two URLs.
+Every script passes in both layouts; split, the live messages, commands with their acks, presence,
+clock offsets, the pipeline and the license upload of the setup cross processes over NATS. CI runs
+the single-process layout only.
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on pushes to `main`, on tags `v*` and
@@ -247,8 +280,11 @@ chore: move the Go module to github.com/DarmawanWeb/netra-fleet-be
    `<METHOD> <path>`. When the details matter, also call `s.audit(r, "area.action", target, detail)`,
    as `replyAck` in [`robotcontrol.go`](../internal/api/robotcontrol.go) and
    [`clients.go`](../internal/api/clients.go) do.
-5. **Live updates and events.** Use `s.hub.Broadcast(...)` when dashboards must refresh, and
-   `s.bus.Publish("netra....", payload)` for an event other systems may consume.
+5. **Live updates and events.** Use `s.relay.Broadcast(...)` when dashboards must refresh (it
+   reaches the dashboards of every api process), and `s.bus.Publish("netra....", payload)` for an
+   event other systems may consume. Send robot commands with `sendCommand` or `commandAndWait`,
+   and Telegram work with `s.relay.Alert`, never through the hub: in a split installation the
+   robot and the worker are in other processes.
 6. **Tests.** Call the handler with `httptest` on a `Server` without a store, as in
    [`command_test.go`](../internal/api/command_test.go) and
    [`robotcontrol_test.go`](../internal/api/robotcontrol_test.go) (`s.audit` skips the database when

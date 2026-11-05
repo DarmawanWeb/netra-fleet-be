@@ -15,6 +15,7 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
@@ -57,13 +58,15 @@ func (s *Server) robotWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn := hub.NewConn(ws)
 	s.hub.AddRobot(robotID, conn)
+	s.relay.RobotsChanged()
 	metrics.Default.Set("netra_robot_online", "Robot connected (1) or not (0).", 1, "robot", robotID)
-	s.hub.Broadcast(map[string]any{"type": "robot_online", "robot_id": robotID, "online": true})
+	s.relay.Broadcast(map[string]any{"type": "robot_online", "robot_id": robotID, "online": true})
 	slog.Info("robot connected", "robot", robotID)
 	defer func() {
 		s.hub.RemoveRobot(robotID, conn)
+		s.relay.RobotsChanged()
 		metrics.Default.Set("netra_robot_online", "Robot connected (1) or not (0).", 0, "robot", robotID)
-		s.hub.Broadcast(map[string]any{"type": "robot_online", "robot_id": robotID, "online": false})
+		s.relay.Broadcast(map[string]any{"type": "robot_online", "robot_id": robotID, "online": false})
 		slog.Info("robot disconnected", "robot", robotID)
 	}()
 	ws.SetReadLimit(1 << 20)
@@ -85,7 +88,9 @@ func (s *Server) handleRobotMessage(ctx context.Context, robotID string, data []
 	patrolID := patrolRef(m.PatrolID)
 	switch m.Type {
 	case "telemetry":
-		s.noteClock(robotID, m.TS, time.Now())
+		if s.noteClock(robotID, m.TS, time.Now()) {
+			s.relay.RobotsChanged() // the api processes show the offset
+		}
 		if err := s.store.SaveTelemetry(ctx, robotID, data); err != nil {
 			slog.Error("save telemetry", "err", err)
 		}
@@ -118,7 +123,7 @@ func (s *Server) handleRobotMessage(ctx context.Context, robotID string, data []
 	default:
 		return
 	}
-	s.hub.Broadcast(map[string]any{"type": m.Type, "robot_id": robotID, "data": json.RawMessage(data)})
+	s.relay.Broadcast(map[string]any{"type": m.Type, "robot_id": robotID, "data": json.RawMessage(data)})
 	s.bus.Publish("netra.robot."+robotID+"."+m.Type, json.RawMessage(data))
 	metrics.Default.Add("netra_robot_messages_total", "Robot WebSocket messages.", 1, "type", m.Type)
 }
@@ -187,17 +192,55 @@ func (g *gpsFix) valid() bool {
 		*g.Lon >= -180 && *g.Lon <= 180
 }
 
-// sendCommand sends a command to a robot and remembers it until the ack.
-func (s *Server) sendCommand(robotID, name string, args map[string]any, patrolID int64) (string, error) {
-	id := fmt.Sprintf("%s-%d", name, time.Now().UnixNano())
-	if err := s.hub.SendRobot(robotID, map[string]any{"type": "command", "id": id, "name": name, "args": args}); err != nil {
+func commandID(name string) string { return fmt.Sprintf("%s-%d", name, time.Now().UnixNano()) }
+
+// sendCommand sends a command to a robot through its gateway, which remembers it until the ack.
+func (s *Server) sendCommand(ctx context.Context, robotID, name string, args map[string]any, patrolID int64) (string, error) {
+	id := commandID(name)
+	if _, err := s.relay.Command(ctx, robotID, relay.Command{ID: id, Name: name, Args: args, PatrolID: patrolID}); err != nil {
 		return "", err
 	}
-	s.mu.Lock()
-	s.pending[id] = pendingCommand{patrolID: patrolID, name: name}
-	s.mu.Unlock()
 	return id, nil
 }
+
+// gateway is the robot end of the relay in this process: the robot connections of the hub.
+type gateway struct{ s *Server }
+
+// Deliver sends a command to a robot connected here and keeps it until the robot's ack.
+func (g gateway) Deliver(robotID string, cmd relay.Command, ack func(relay.Ack)) (func(), error) {
+	s := g.s
+	s.mu.Lock()
+	s.pending[cmd.ID] = pendingCommand{patrolID: cmd.PatrolID, name: cmd.Name, ack: ack}
+	s.mu.Unlock()
+	forget := func() {
+		s.mu.Lock()
+		delete(s.pending, cmd.ID)
+		s.mu.Unlock()
+	}
+	if err := s.hub.SendRobot(robotID, map[string]any{"type": "command", "id": cmd.ID, "name": cmd.Name,
+		"args": cmd.Args}); err != nil {
+		forget()
+		return nil, err
+	}
+	return forget, nil
+}
+
+// Robots lists the robots connected here with their clock offsets.
+func (g gateway) Robots() []relay.Robot {
+	ids := g.s.hub.Robots()
+	out := make([]relay.Robot, 0, len(ids))
+	for _, id := range ids {
+		r := relay.Robot{ID: id}
+		if skew, ok := g.s.offset(id); ok {
+			r.SkewS = relay.Seconds(skew)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// ClockSkew is the clock offset measured here.
+func (g gateway) ClockSkew(robotID string) (time.Duration, bool) { return g.s.offset(robotID) }
 
 func (s *Server) resolveCommand(ctx context.Context, rawID string, ok bool, msg string) {
 	var id string
@@ -208,8 +251,8 @@ func (s *Server) resolveCommand(ctx context.Context, rawID string, ok bool, msg 
 	cmd, found := s.pending[id]
 	delete(s.pending, id)
 	s.mu.Unlock()
-	if found && cmd.done != nil {
-		cmd.done <- ackResult{OK: ok, Msg: msg}
+	if found && cmd.ack != nil {
+		cmd.ack(relay.Ack{OK: ok, Msg: msg})
 	}
 	if !found || cmd.patrolID == 0 {
 		return
@@ -235,11 +278,11 @@ func (s *Server) StartPatrol(ctx context.Context, robotID string, routeID int64,
 	if err != nil {
 		return 0, err
 	}
-	if _, err := s.sendCommand(robotID, "start_patrol", map[string]any{"route_id": routeID, "patrol_id": id}, id); err != nil {
+	if _, err := s.sendCommand(ctx, robotID, "start_patrol", map[string]any{"route_id": routeID, "patrol_id": id}, id); err != nil {
 		_ = s.store.PatrolStatus(ctx, id, "failed", err.Error())
 		return id, err
 	}
-	s.hub.Broadcast(map[string]any{"type": "patrol_requested", "robot_id": robotID, "patrol_id": id})
+	s.relay.Broadcast(map[string]any{"type": "patrol_requested", "robot_id": robotID, "patrol_id": id})
 	return id, nil
 }
 
@@ -316,13 +359,10 @@ func (s *Server) robotAnomaly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if created {
-		s.hub.Broadcast(map[string]any{"type": "anomaly", "robot_id": robotID, "id": id, "status": "queued"})
+		s.relay.Broadcast(map[string]any{"type": "anomaly", "robot_id": robotID, "id": id, "status": "queued"})
 		metrics.Default.Add("netra_anomalies_received_total", "Anomalies uploaded by robots.", 1, "category", a.EarlyCategory)
 		s.bus.Publish("netra.anomaly.queued", map[string]any{"id": id, "robot_id": robotID, "category": a.EarlyCategory})
-		select {
-		case s.wake <- struct{}{}:
-		default:
-		}
+		s.relay.Wake()
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "created": created})
 }
@@ -345,7 +385,7 @@ func (s *Server) robotRoute(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	s.hub.Broadcast(map[string]any{"type": "route", "robot_id": robotID, "id": id})
+	s.relay.Broadcast(map[string]any{"type": "route", "robot_id": robotID, "id": id})
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 

@@ -14,6 +14,7 @@ import requests
 import websocket
 
 API = os.environ.get('NETRA_URL', 'http://localhost:8080')
+ROBOT_API = os.environ.get('NETRA_ROBOT_URL', API)  # the gateway of a split installation
 USER, PASSWORD = os.environ.get('NETRA_USER', 'admin'), os.environ.get('NETRA_PASSWORD', 'admin')
 SUB = f'{API}/api/v1/substation'
 JPEG = base64.b64decode(
@@ -60,13 +61,13 @@ rh = {'Authorization': 'Bearer ' + s.post(f'{API}/api/v1/robots', json={'id': ro
 oh = {'Authorization': 'Bearer ' + s.post(f'{API}/api/v1/robots', json={'id': other_id}).json()['token'],
       'X-Robot-Id': other_id}
 inbox = []
-ws = websocket.create_connection(API.replace('http', 'ws') + '/api/v1/robot/ws', header=[f'{k}: {v}' for k, v in rh.items()])
+ws = websocket.create_connection(ROBOT_API.replace('http', 'ws') + '/api/v1/robot/ws', header=[f'{k}: {v}' for k, v in rh.items()])
 threading.Thread(target=collect, args=(ws, inbox), daemon=True).start()
 ws.send(json.dumps({'type': 'hello', 'robot_id': robot_id, 'version': 1}))
 csv = '# x,y,yaw_deg,dwell_sec\n0,0,0,0\n10,0,90,15\n10,10,180,20\n0,0,0,0\n'
 meta = {'uid': str(uuid.uuid4()), 'name': 'Bay 1 round', 'recorded_at': time.time(), 'length_m': 34, 'stops': 2,
         'closed': True}
-route_id = requests.post(f'{API}/api/v1/robot/routes', headers=rh, data={'meta': json.dumps(meta)},
+route_id = requests.post(f'{ROBOT_API}/api/v1/robot/routes', headers=rh, data={'meta': json.dumps(meta)},
                          files={'route.csv': ('route.csv', csv, 'text/csv')}).json()['id']
 
 # Settings and criteria
@@ -117,10 +118,10 @@ points = s.get(f'{SUB}/points', params={'route_id': route_id}).json()
 check([p['id'] for p in points] == [thermal['id'], pd['id']], 'points listed by stop')
 
 # The robot's plan, and the robot of another route
-plan = requests.get(f'{API}/api/v1/robot/routes/{route_id}/inspection', headers=rh).json()['points']
+plan = requests.get(f'{ROBOT_API}/api/v1/robot/routes/{route_id}/inspection', headers=rh).json()['points']
 check(len(plan) == 2 and plan[0]['targets'][3]['limit_c'] == 90 and plan[0]['settings']['reference'] == 'auto'
       and plan[1]['settings'] == {'watch_db': 12, 'alarm_db': 20}, 'robot gets the inspection plan with site levels')
-check(requests.get(f'{API}/api/v1/robot/routes/{route_id}/inspection', headers=oh).status_code == 403,
+check(requests.get(f'{ROBOT_API}/api/v1/robot/routes/{route_id}/inspection', headers=oh).status_code == 403,
       'plan of another robot refused')
 
 
@@ -130,7 +131,7 @@ def upload(point_id, headers=None, uid=None, images=True, **reading):
     files = {'meta': (None, json.dumps(m))}
     if images:
         files.update({'thermal': ('thermal.jpg', JPEG, 'image/jpeg'), 'visual': ('visual.jpg', JPEG, 'image/jpeg')})
-    return requests.post(f'{API}/api/v1/robot/inspections', headers=headers or rh, files=files)
+    return requests.post(f'{ROBOT_API}/api/v1/robot/inspections', headers=headers or rh, files=files)
 
 
 def readings(r, s_, t, body):
@@ -230,7 +231,7 @@ check(s.delete(f"{SUB}/assets/{pms['id']}").status_code == 409, 'asset in use ca
 check(s.delete(f"{SUB}/points/{thermal['id']}").status_code == 409, 'point with inspections cannot be deleted')
 r = s.put(f"{SUB}/points/{thermal['id']}", json={**point, 'enabled': False})
 check(r.status_code == 200 and not r.json()['enabled'], 'point disabled')
-plan = requests.get(f'{API}/api/v1/robot/routes/{route_id}/inspection', headers=rh).json()['points']
+plan = requests.get(f'{ROBOT_API}/api/v1/robot/routes/{route_id}/inspection', headers=rh).json()['points']
 check([p['id'] for p in plan] == [pd['id']], 'disabled point left out of the plan')
 
 # Take a point now: the robot gets inspect_point

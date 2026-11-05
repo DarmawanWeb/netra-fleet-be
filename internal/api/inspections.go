@@ -18,6 +18,7 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/i18n"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/substation"
 )
@@ -189,7 +190,7 @@ func (s *Server) robotInspectionUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if created {
-		s.hub.Broadcast(map[string]any{"type": "inspection", "id": id, "point_id": p.ID, "robot_id": robotID,
+		s.relay.Broadcast(map[string]any{"type": "inspection", "id": id, "point_id": p.ID, "robot_id": robotID,
 			"priority": in.Priority, "kind": p.Kind})
 		s.bus.Publish("netra.substation.inspection", map[string]any{"id": id, "point_id": p.ID, "robot_id": robotID,
 			"priority": in.Priority})
@@ -204,7 +205,8 @@ func (s *Server) robotInspectionUpload(w http.ResponseWriter, r *http.Request) {
 					"priority", strconv.Itoa(ch.Finding.Priority))
 			}
 			if (ch.Event == "opened" || ch.Event == "escalated") && site.Alerts(ch.Finding.Priority) {
-				go s.alertFinding(ch.Finding.ID, id, site)
+				s.relay.Alert(relay.Alert{Kind: relay.AlertFinding, ID: ch.Finding.ID, Inspection: id,
+					Chat: site.TelegramChatID})
 			}
 		}
 	}
@@ -290,8 +292,9 @@ func evaluate(p store.InspectionPoint, m inspectionMeta, site substation.SiteSet
 	return in, obs
 }
 
-// alertFinding sends a finding to Telegram with the image of the inspection that rated it.
-func (s *Server) alertFinding(findingID, inspectionID int64, site substation.SiteSettings) {
+// alertFinding sends a finding to Telegram, to the site's chat, with the image of the inspection
+// that rated it.
+func (s *Server) alertFinding(findingID, inspectionID int64, chat string) {
 	if !s.telegram.Enabled() || !s.lic.Has(license.Telegram) {
 		return
 	}
@@ -314,16 +317,16 @@ func (s *Server) alertFinding(findingID, inspectionID int64, site substation.Sit
 		image = in.Images["visual"]
 	}
 	if image != "" {
-		err = s.telegram.SendPhoto(ctx, site.TelegramChatID, text, image)
+		err = s.telegram.SendPhoto(ctx, chat, text, image)
 	} else {
-		err = s.telegram.SendMessage(ctx, site.TelegramChatID, text)
+		err = s.telegram.SendMessage(ctx, chat, text)
 	}
 	if err != nil {
 		slog.Warn("telegram", "finding", f.ID, "err", err)
 		return
 	}
 	_ = s.store.MarkFindingNotified(ctx, f.ID)
-	s.hub.Broadcast(map[string]any{"type": "finding", "id": f.ID, "event": "notified", "status": f.Status,
+	s.relay.Broadcast(map[string]any{"type": "finding", "id": f.ID, "event": "notified", "status": f.Status,
 		"priority": f.Priority, "point_id": f.PointID, "asset_id": f.AssetID})
 }
 

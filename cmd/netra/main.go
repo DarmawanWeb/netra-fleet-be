@@ -2,6 +2,7 @@
 // maintenance commands.
 //
 //	netra [-config netra.env] [serve]          run the service
+//	netra serve -roles api,gateway             run some roles of a split installation
 //	netra version                              the version
 //	netra installation-id                      this server's installation ID (licenses are bound to it)
 //	netra reset-password <user> [password]     set a new password (a generated one when none is given)
@@ -70,7 +71,7 @@ func main() {
 	var err error
 	switch cmd {
 	case "serve":
-		err = app.Serve(ctx, cfg)
+		err = serve(ctx, cfg, args)
 	case "installation-id":
 		err = installationID(ctx, cfg)
 	case "reset-password":
@@ -93,13 +94,28 @@ func main() {
 func usage(w io.Writer) {
 	fmt.Fprintln(w, `usage: netra [-config netra.env] <command>
 
-  serve                          run the service (the default)
+  serve [-roles list]            run the service (the default); -roles api,gateway,worker runs
+                                 only those roles (default NETRA_ROLES, else all)
   version                        print the version
   installation-id                print this server's installation ID
   reset-password <user> [pass]   set a new password; a generated one is printed when none is given
   backup [-out dir]              back up the database now
   restore -yes <file.dump>       replace the database with a backup; stop the service first
   license <file.lic>             check a license against this build and this server`)
+}
+
+// serve runs the service; -roles overrides NETRA_ROLES.
+func serve(ctx context.Context, cfg config.Config, args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	roles := fs.String("roles", "", "roles to run: all, or a comma list of api, gateway and worker (default NETRA_ROLES, else all)")
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		return fmt.Errorf("serve: unexpected argument %q", fs.Arg(0))
+	}
+	if *roles != "" {
+		cfg.Roles = *roles
+	}
+	return app.Serve(ctx, cfg)
 }
 
 func fatal(err error) {
