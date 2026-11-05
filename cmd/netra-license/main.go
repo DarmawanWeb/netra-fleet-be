@@ -3,6 +3,7 @@
 //	netra-license keygen  -out ~/netra-keys/ezra            # ezra.key (private) + ezra.pub
 //	netra-license issue   -key ~/netra-keys/ezra.key -client "PLN UPT Bekasi" \
 //	                      -edition substation -tier pro -robots 3 -days 365 \
+//	                      -installation NETRA-7KQ3-M9XD-2WPA \
 //	                      -name "NETRA Gardu" -color "#0f766e" -logo logo.svg -out bekasi.lic
 //	netra-license inspect bekasi.lic                        # payload, signature check, status
 //	netra-license presets                                   # editions, tiers and feature modules
@@ -115,7 +116,10 @@ func (l *listFlag) Set(v string) error {
 	return nil
 }
 
-var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+var (
+	hexColor       = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+	installationID = regexp.MustCompile(`^NETRA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$`)
+)
 
 func issue(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("issue", flag.ExitOnError)
@@ -123,6 +127,8 @@ func issue(args []string, stdout io.Writer) error {
 	client := fs.String("client", "", "client name, shown in the dashboard and reports (required)")
 	edition := fs.String("edition", "custom", "edition: "+names(license.Editions))
 	tier := fs.String("tier", "basic", "tier: "+names(license.Tiers))
+	mapMode := fs.String("map", "", "map mode: "+strings.Join(license.MapModes, ", ")+" (default: the edition's)")
+	installation := fs.String("installation", "", "bind to this installation ID (NETRA-XXXX-XXXX-XXXX, shown by the server); empty: any server")
 	robots := fs.Int("robots", 0, "maximum number of robots, 0 for no limit")
 	days := fs.Int("days", 365, "days of validity, 0 for no expiry")
 	id := fs.String("id", "", "license id (default: random)")
@@ -162,9 +168,19 @@ func issue(args []string, stdout io.Writer) error {
 	if *colorDark == "" {
 		*colorDark = *color
 	}
+	if *mapMode == "" {
+		*mapMode = license.DefaultMap(*edition)
+	}
+	if !license.ValidMap(*mapMode) {
+		return fmt.Errorf("issue: map %q is not one of %s", *mapMode, strings.Join(license.MapModes, ", "))
+	}
+	bound := license.NormalizeInstallation(*installation)
+	if bound != "" && !installationID.MatchString(bound) {
+		return fmt.Errorf("issue: installation %q is not NETRA-XXXX-XXXX-XXXX", *installation)
+	}
 	l := license.License{
-		ID: *id, Client: *client, Edition: *edition, Tier: *tier, Features: features, MaxRobots: *robots,
-		IssuedAt: time.Now().UTC().Truncate(time.Second),
+		Product: license.Product, ID: *id, Client: *client, Edition: *edition, Tier: *tier, Features: features,
+		Map: *mapMode, MaxRobots: *robots, Installation: bound, IssuedAt: time.Now().UTC().Truncate(time.Second),
 		Branding: license.Branding{Name: *name, Color: *color, ColorDark: *colorDark},
 	}
 	if l.ID == "" {
@@ -191,7 +207,10 @@ func issue(args []string, stdout io.Writer) error {
 	if err := os.WriteFile(*out, []byte(text+"\n"), 0o600); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s: %s, %s/%s, %s\n", *out, l.Client, l.Edition, l.Tier, strings.Join(l.Features, " "))
+	fmt.Fprintf(stdout, "%s: %s, %s/%s, map %s, %s\n", *out, l.Client, l.Edition, l.Tier, l.Map, strings.Join(l.Features, " "))
+	if l.Installation != "" {
+		fmt.Fprintf(stdout, "bound to %s\n", l.Installation)
+	}
 	return nil
 }
 
@@ -268,6 +287,11 @@ func presets(w io.Writer) {
 	printSets(w, license.Editions)
 	fmt.Fprintln(w, "\nTiers (premium modules):")
 	printSets(w, license.Tiers)
+	fmt.Fprintln(w, "\nMap modes (fixed by the license; -map):")
+	fmt.Fprintln(w, "  floorplan    indoor floor plan (SVG, PNG, JPG, PDF) calibrated to the robot map")
+	fmt.Fprintln(w, "  pgm          the robot's own map (map.yaml + map.pgm), aligned by its origin")
+	fmt.Fprintln(w, "  gps          outdoor basemap in latitude and longitude")
+	fmt.Fprintln(w, "  default per edition: mall floorplan, substation gps, custom floorplan")
 }
 
 func printSets(w io.Writer, sets map[string][]string) {

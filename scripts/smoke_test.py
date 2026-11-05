@@ -118,6 +118,11 @@ check('public_url' in info, 'info endpoint')
 check(info['license']['status'] == 'valid' and {'anomaly', 'crowd', 'integration'} <= set(info['features']),
       'license applied: ' + ' '.join(info['features']))
 check(requests.get(f'{API}/api/v1/branding').json()['name'] == info['branding']['name'], 'branding is public')
+check(info['installation_id'].startswith('NETRA-') and info['map_mode'] == 'floorplan' and info['version'],
+      'installation ID, map mode and version')
+check(requests.get(f'{API}/api/v1/setup').json()['required'] is False, 'setup closed once users exist')
+check(requests.post(f'{API}/api/v1/setup', json={'username': 'intruder', 'password': 'intruder-pass'}).status_code == 409,
+      'setup cannot add an admin later')
 lic = s.get(f'{API}/api/v1/license').json()
 check(lic['robots'] >= 1 and lic['robot_limit'] == info['robot_limit'], 'license page')
 check(s.put(f'{API}/api/v1/license', data='NETRA-LIC-1.forged.sig').status_code == 400, 'forged license refused')

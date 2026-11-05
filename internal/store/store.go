@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"embed"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -41,11 +42,27 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	return s, s.migrate(ctx)
 }
 
+// Ping checks that the database answers.
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
 // Close releases the connection pool.
 func (s *Store) Close() error { return s.db.Close() }
 
+// migrationLock is the advisory lock key that serialises migrations: two servers starting on one
+// database at once must not both create the same tables.
+const migrationLock = 7151987
+
 func (s *Store) migrate(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx,
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLock); err != nil {
+		return err
+	}
+	defer func() { _, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLock) }()
+	if _, err := conn.ExecContext(ctx,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
@@ -60,7 +77,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	sort.Strings(names)
 	for _, name := range names {
 		var done bool
-		if err := s.db.QueryRowContext(ctx,
+		if err := conn.QueryRowContext(ctx,
 			`SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`, name).Scan(&done); err != nil {
 			return err
 		}
@@ -71,13 +88,13 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		tx, err := s.db.BeginTx(ctx, nil)
+		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 			_ = tx.Rollback()
-			return err
+			return fmt.Errorf("migration %s: %w", name, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, name); err != nil {
 			_ = tx.Rollback()

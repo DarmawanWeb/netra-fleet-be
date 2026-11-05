@@ -1,4 +1,4 @@
-.PHONY: run run-licensed dev-license test lint build ai-test docker smoke smoke-unlicensed
+.PHONY: run run-licensed dev-license test lint build netra ai-test docker smoke smoke-unlicensed
 
 # Development license (.dev/, ignored by git): a local key trusted only by run-licensed builds.
 DEV ?= .dev
@@ -31,6 +31,12 @@ ai-test:
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/netra-api ./cmd/netra-api
+
+FE ?= ../netra-fleet-fe
+netra:          ## the single application: the dashboard export of $(FE) built into bin/netra
+	cd $(FE) && npm run build
+	rm -rf internal/web/dist && cp -r $(FE)/out internal/web/dist
+	CGO_ENABLED=0 go build -tags webui -trimpath -ldflags="-s -w" -o bin/netra ./cmd/netra
 
 docker:
 	docker build -t netra-api .

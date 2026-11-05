@@ -33,7 +33,7 @@ func licensed(t *testing.T, mutate func(*license.License)) *license.State {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st := license.NewState([]ed25519.PublicKey{pub})
+	st := license.NewState([]ed25519.PublicKey{pub}, "NETRA-TEST-0000-0000")
 	if _, err := st.Apply(text, "file"); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestRobotLimit(t *testing.T) {
 		want int
 	}{
 		{nil, unlicensedRobots},
-		{license.NewState(nil), unlicensedRobots},
+		{license.NewState(nil, ""), unlicensedRobots},
 		{licensed(t, func(l *license.License) { l.MaxRobots = 3 }), 3},
 		{licensed(t, nil), 0},
 		// Expired beyond the grace period: modules off, but the limit of the license stays.

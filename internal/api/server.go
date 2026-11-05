@@ -41,6 +41,9 @@ type Server struct {
 	detector detect.Detector
 	bus      *bus.Publisher
 	lic      *license.State // nil: no license, core only
+	rt       Runtime
+	sizes    dataSize
+	web      http.Handler // the dashboard files; nil when another server serves them
 	limiter  *loginLimiter
 	upgrader websocket.Upgrader
 	wake     chan struct{}
@@ -74,8 +77,11 @@ func New(cfg config.Config, st *store.Store, h *hub.Hub, tg *notify.Telegram, de
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
+	mux.HandleFunc("GET /readyz", s.ready)
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 
+	mux.HandleFunc("GET /api/v1/setup", s.setupState)
+	mux.HandleFunc("POST /api/v1/setup", s.setup)
 	mux.HandleFunc("GET /api/v1/branding", s.branding)
 	mux.HandleFunc("GET /api/v1/branding/logo", s.brandingLogo)
 
@@ -125,6 +131,9 @@ func (s *Server) Handler() http.Handler {
 	route(auth.PermUsers, "POST /api/v1/users/{id}/password", s.resetPassword)
 	route(auth.PermUsers, "GET /api/v1/license", s.getLicense)
 	route(auth.PermUsers, "PUT /api/v1/license", s.putLicense)
+	route(auth.PermUsers, "GET /api/v1/system", s.system)
+	route(auth.PermUsers, "POST /api/v1/system/backups", s.runBackup)
+	route(auth.PermUsers, "GET /api/v1/system/backups/{name}", s.backupFile)
 
 	// Anomaly: robot detections, validation, category rules, on-robot inspection.
 	module(license.Anomaly, view, "GET /api/v1/anomalies", s.listAnomalies)
@@ -169,8 +178,15 @@ func (s *Server) Handler() http.Handler {
 	robot("POST /api/v1/robot/routes", s.robotRoute)
 	robot("GET /api/v1/robot/routes/{id}/file", s.routeFile)
 
+	// The dashboard, when this server serves it (the single-application install).
+	if s.web != nil {
+		mux.Handle("/", s.web)
+	}
 	return metrics.Middleware(mux, s.cors(mux))
 }
+
+// SetWeb makes the server serve the dashboard files for every path no API route takes.
+func (s *Server) SetWeb(h http.Handler) { s.web = h }
 
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

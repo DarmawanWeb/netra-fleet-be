@@ -52,23 +52,44 @@ func TrustedKeys() ([]ed25519.PublicKey, error) {
 
 // State is the license a running server applies. The zero value has no license: core only.
 type State struct {
-	mu     sync.RWMutex
-	keys   []ed25519.PublicKey
-	lic    *License
-	source string // "file", "upload"
-	err    string // why the last license given was refused
-	now    func() time.Time
+	mu           sync.RWMutex
+	keys         []ed25519.PublicKey
+	installation string // this server's installation ID
+	lic          *License
+	source       string // "file", "upload"
+	err          string // why the last license given was refused
+	now          func() time.Time
 }
 
-// NewState verifies licenses against keys.
-func NewState(keys []ed25519.PublicKey) *State {
-	return &State{keys: keys, now: time.Now}
+// NewState verifies licenses against keys for the server with the given installation ID.
+func NewState(keys []ed25519.PublicKey, installation string) *State {
+	return &State{keys: keys, installation: NormalizeInstallation(installation), now: time.Now}
+}
+
+// Installation is this server's installation ID.
+func (s *State) Installation() string {
+	if s == nil {
+		return ""
+	}
+	return s.installation
+}
+
+// verify checks the signature and that a bound license is bound to this installation.
+func (s *State) verify(text string) (License, error) {
+	l, err := Verify(text, s.keys)
+	if err != nil {
+		return l, err
+	}
+	if l.Installation != "" && NormalizeInstallation(l.Installation) != s.installation {
+		return l, fmt.Errorf("%w: it is for %s, this server is %s", ErrInstallation, l.Installation, s.installation)
+	}
+	return l, nil
 }
 
 // Apply verifies text and, when it is valid and not older than the current license, makes it
 // the current one. A refused license leaves the current one in place.
 func (s *State) Apply(text, source string) (License, error) {
-	l, err := Verify(text, s.keys)
+	l, err := s.verify(text)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
@@ -96,7 +117,7 @@ func (s *State) Load(cands ...Candidate) {
 		if strings.TrimSpace(c.Text) == "" {
 			continue
 		}
-		l, err := Verify(c.Text, s.keys)
+		l, err := s.verify(c.Text)
 		if err != nil {
 			if firstErr == "" {
 				firstErr = c.Source + ": " + err.Error()
@@ -121,7 +142,7 @@ func (s *State) Check(text string) (License, error) {
 	if s == nil {
 		return License{}, ErrSignature
 	}
-	return Verify(text, s.keys)
+	return s.verify(text)
 }
 
 // Status of the current license.
@@ -185,6 +206,20 @@ func (s *State) MaxRobots() int {
 	return s.lic.MaxRobots
 }
 
+// MapMode is the map mode of the current license, also after it expired (the maps a deployment
+// has drawn stay usable); floorplan without a license.
+func (s *State) MapMode() string {
+	if s == nil {
+		return MapFloorPlan
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.lic == nil {
+		return MapFloorPlan
+	}
+	return s.lic.MapMode()
+}
+
 // Branding of the current license, also after it expired (the product keeps its name).
 func (s *State) Branding() Branding {
 	if s == nil {
@@ -200,31 +235,35 @@ func (s *State) Branding() Branding {
 
 // Info is what the dashboard is told about the license.
 type Info struct {
-	Status    Status     `json:"status"`
-	ID        string     `json:"id,omitempty"`
-	Client    string     `json:"client,omitempty"`
-	Edition   string     `json:"edition,omitempty"`
-	Tier      string     `json:"tier,omitempty"`
-	Features  []string   `json:"features"`
-	MaxRobots int        `json:"max_robots"`
-	IssuedAt  *time.Time `json:"issued_at,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	GraceEnds *time.Time `json:"grace_ends,omitempty"`
-	Source    string     `json:"source,omitempty"`
-	Error     string     `json:"error,omitempty"`
+	Status    Status   `json:"status"`
+	ID        string   `json:"id,omitempty"`
+	Client    string   `json:"client,omitempty"`
+	Edition   string   `json:"edition,omitempty"`
+	Tier      string   `json:"tier,omitempty"`
+	Features  []string `json:"features"`
+	Map       string   `json:"map"`
+	MaxRobots int      `json:"max_robots"`
+	// Installation is the installation the license is bound to; empty when it is not bound.
+	Installation string     `json:"installation,omitempty"`
+	IssuedAt     *time.Time `json:"issued_at,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	GraceEnds    *time.Time `json:"grace_ends,omitempty"`
+	Source       string     `json:"source,omitempty"`
+	Error        string     `json:"error,omitempty"`
 }
 
 // Info describes the current license.
 func (s *State) Info() Info {
 	if s == nil {
-		return Info{Status: Missing, Features: []string{}}
+		return Info{Status: Missing, Features: []string{}, Map: MapFloorPlan}
 	}
 	features := s.Features()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	info := Info{Status: s.statusLocked(), Features: features, Error: s.err}
+	info := Info{Status: s.statusLocked(), Features: features, Map: MapFloorPlan, Error: s.err}
 	if l := s.lic; l != nil {
 		info.ID, info.Client, info.Edition, info.Tier = l.ID, l.Client, l.Edition, l.Tier
+		info.Map, info.Installation = l.MapMode(), l.Installation
 		info.MaxRobots, info.Source = l.MaxRobots, s.source
 		issued := l.IssuedAt
 		info.IssuedAt = &issued

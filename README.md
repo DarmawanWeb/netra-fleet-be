@@ -131,6 +131,7 @@ instead ([INTEGRATION.md](INTEGRATION.md)).
 ```bash
 cp .env.example .env && set -a && . ./.env && set +a
 make run                 # API on :8080 (PostgreSQL required; migrations run at start)
+make netra               # the single application with the dashboard inside (bin/netra)
 cd ai && pip install -e ".[dev]" && uvicorn netra_ai.main:app --port 8090
 make test ai-test lint   # unit tests, ruff, golangci-lint
 make smoke               # end-to-end against a running API

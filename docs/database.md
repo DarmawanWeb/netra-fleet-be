@@ -440,6 +440,22 @@ dashboard ([licensing](licensing.md#installing-a-license)).
 | `uploaded_by` | `TEXT` | Not null, default `''`; username |
 | `uploaded_at` | `TIMESTAMPTZ` | Not null, default `now()` |
 
+### 007_settings.sql
+
+[`007_settings.sql`](../internal/store/migrations/007_settings.sql) adds the settings of the
+installation.
+
+**`settings`**
+
+| Column | Type | Notes |
+|---|---|---|
+| `key` | `TEXT` | Primary key; `installation_id` holds the installation ID licenses are bound to |
+| `value` | `TEXT` | Not null |
+| `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+Migrations run under the advisory lock `7151987`, so servers starting on one database at once
+apply them one after the other.
+
 ## Retention
 
 - With TimescaleDB, `telemetry` rows older than 180 days are dropped and chunks older than 7 days

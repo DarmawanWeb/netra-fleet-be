@@ -65,12 +65,15 @@ NETRA-LIC-1.<payload>.<signature>
 
 ```json
 {
+  "product": "netra",
   "id": "20261104-5adae5bc36f0",
   "client": "PLN UPT Bekasi",
   "edition": "substation",
   "tier": "pro",
   "features": ["alerts.telegram", "audit", "reports.export", "substation"],
+  "map": "gps",
   "max_robots": 3,
+  "installation": "NETRA-7KQ3-M9XD-2WPA",
   "issued_at": "2026-11-04T03:00:08Z",
   "expires_at": "2027-11-04T03:00:08Z",
   "branding": {
@@ -86,7 +89,36 @@ NETRA-LIC-1.<payload>.<signature>
 ([`internal/license/keys/`](../internal/license/keys/README.md)), so a server without internet
 checks it the same way and a license cannot be made valid by changing the server's
 configuration. Changing one character of the payload breaks the signature. `features` is what
-counts; `edition` and `tier` are labels for the dashboard.
+counts; `edition` and `tier` are labels for the dashboard. A license whose `product` is not
+`netra` is refused; licenses from before the field have none and are NETRA's.
+
+## Map mode
+
+`map` fixes the kind of map the deployment draws its robots on; the dashboard cannot change it.
+
+| `map` | For | Base layer |
+|---|---|---|
+| `floorplan` | indoor sites (malls, buildings) | a floor plan (SVG, PNG, JPG, PDF) calibrated onto the robot map |
+| `pgm` | sites mapped by the robot | the robot's occupancy grid (`map.yaml` + `map.pgm`), aligned by its origin and resolution |
+| `gps` | outdoor sites (substations, yards) | a basemap in latitude and longitude; robots from their GPS or from the robot map through reference points |
+
+Without `map` the edition decides: `mall` floorplan, `substation` gps, `custom` floorplan. The map
+mode stays after the license expires, so the maps already drawn keep working.
+
+## Installation ID and activation
+
+Every server makes an installation ID at its first start, such as `NETRA-7KQ3-M9XD-2WPA`, kept in
+the database (`settings`). The setup wizard and Settings > License show it. A license with
+`installation` works only on that server; a license without it works anywhere.
+
+1. The client installs NETRA and reads the installation ID in the setup wizard.
+2. The client sends it to EZRA Robotics.
+3. EZRA issues the license with `-installation <ID>` and sends the file.
+4. The client installs it in the wizard or in Settings > License. No internet is needed.
+
+The ID is in the database, so a restored backup keeps it; a fresh database is a new installation
+and needs a new license. Letters that look alike are accepted for each other (`O` for `0`, `I`
+and `L` for `1`), and case does not matter.
 
 ## Signing key
 
@@ -112,6 +144,7 @@ the log says `license: no trusted key built in`.
 ```bash
 go run ./cmd/netra-license issue -key ~/netra-keys/ezra.key \
   -client "PLN UPT Bekasi" -edition substation -tier pro -robots 3 -days 365 \
+  -installation NETRA-7KQ3-M9XD-2WPA \
   -name "NETRA Gardu" -color "#0f766e" -logo pln.svg -out bekasi.lic
 go run ./cmd/netra-license inspect bekasi.lic
 ```
@@ -122,6 +155,8 @@ go run ./cmd/netra-license inspect bekasi.lic
 | `-edition` | `mall`, `substation` or `custom` (core only) |
 | `-tier` | `basic`, `pro` or `enterprise` |
 | `-add`, `-remove` | modules to add to or leave out of the edition and tier, comma-separated |
+| `-map` | `floorplan`, `pgm` or `gps`; default the edition's |
+| `-installation` | bind to one server's installation ID; empty: any server |
 | `-robots` | robot limit, 0 for none |
 | `-days` | validity, 0 for no expiry |
 | `-name`, `-color`, `-color-dark`, `-logo` | branding: application name, primary colour `#rrggbb` (light and dark theme), an SVG or PNG logo up to 256 KB embedded in the license |
@@ -135,6 +170,8 @@ status. The image carries `netra-license` too, to check a file on site:
 
 Either:
 
+- **Setup wizard**: a new server has no account; the dashboard opens the wizard, which shows the
+  installation ID, creates the first administrator and takes the license (or skips it: core only).
 - **File**: `NETRA_LICENSE_FILE=/license/netra.lic` (the Netra compose mounts `./license`), or the
   text itself in `NETRA_LICENSE`. Read at start.
 - **Dashboard**: Settings > License > upload (`PUT /api/v1/license`, admin). Applies at once, no
@@ -145,9 +182,8 @@ than the current license is refused (409), so an old file cannot replace a renew
 
 ## What a license does not stop
 
-- A license is not bound to a machine: the same file works on any server. Issue one license per
-  deployment (the client and ID are shown in Settings > License) and give short validity to
-  trial licenses.
+- A license without `-installation` works on any server. Bind every client license to its
+  installation; leave only cloud deployments run by EZRA unbound.
 - Expiry follows the server's clock, so setting the clock back delays it.
 - Whoever can build `netra-api` from source can remove the check. The license protects the images
   delivered to clients, not the source code.
