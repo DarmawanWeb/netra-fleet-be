@@ -112,7 +112,7 @@ same `netra-api` process.
 | `internal/tlsutil` | Self-signed certificate for HTTPS on a local network | [`tlsutil.go`](../internal/tlsutil/tlsutil.go) |
 | `internal/sysinfo` | Disk space and data size for the system page | [`sysinfo.go`](../internal/sysinfo/sysinfo.go) |
 | `internal/version` | Build version, set by the release build | [`version.go`](../internal/version/version.go) |
-| `internal/api` | Dashboard REST API and live feed, robot gateway (WebSocket, uploads), commands and acks, clock-skew correction, anomaly pipeline, patrol start, report endpoints, users and sessions, audit, integration-client admin, map modes (robot maps, site georeference) | [`server.go`](../internal/api/server.go) (routes, middleware, helpers), [`dashboard.go`](../internal/api/dashboard.go), [`robot.go`](../internal/api/robot.go), [`robotcontrol.go`](../internal/api/robotcontrol.go), [`clock.go`](../internal/api/clock.go), [`pipeline.go`](../internal/api/pipeline.go), [`reports.go`](../internal/api/reports.go), [`users.go`](../internal/api/users.go), [`clients.go`](../internal/api/clients.go), [`maps.go`](../internal/api/maps.go) |
+| `internal/api` | Dashboard REST API and live feed, robot gateway (WebSocket, uploads), commands and acks, clock-skew correction, anomaly pipeline, patrol start, report endpoints, users and sessions, audit, integration-client admin, map modes (robot maps, site georeference), substation inspection (assets, points, robot inspections, findings, exports) | [`server.go`](../internal/api/server.go) (routes, middleware, helpers), [`dashboard.go`](../internal/api/dashboard.go), [`robot.go`](../internal/api/robot.go), [`robotcontrol.go`](../internal/api/robotcontrol.go), [`clock.go`](../internal/api/clock.go), [`pipeline.go`](../internal/api/pipeline.go), [`reports.go`](../internal/api/reports.go), [`users.go`](../internal/api/users.go), [`clients.go`](../internal/api/clients.go), [`maps.go`](../internal/api/maps.go), [`substation.go`](../internal/api/substation.go), [`inspections.go`](../internal/api/inspections.go), [`substation_reports.go`](../internal/api/substation_reports.go) |
 | `internal/auth` | PBKDF2-SHA256 password hashes, random tokens and their SHA-256 digests, roles and permissions | [`auth.go`](../internal/auth/auth.go), [`rbac.go`](../internal/auth/rbac.go) |
 | `internal/bus` | Publish-only NATS client over the core text protocol, reconnects lazily | [`nats.go`](../internal/bus/nats.go) |
 | `internal/config` | Environment variables into `config.Config` | [`config.go`](../internal/config/config.go) |
@@ -123,11 +123,12 @@ same `netra-api` process.
 | `internal/license` | Signed licenses: editions, tiers and feature modules, Ed25519 verification against the built-in keys, status with grace period, branding | [`license.go`](../internal/license/license.go), [`state.go`](../internal/license/state.go), [`keys/`](../internal/license/keys/README.md) |
 | `internal/i18n` | English and Indonesian texts for reports and Telegram captions, category labels | [`i18n.go`](../internal/i18n/i18n.go) |
 | `internal/metrics` | Minimal Prometheus registry (counters, gauges) and the HTTP middleware | [`metrics.go`](../internal/metrics/metrics.go) |
-| `internal/notify` | Telegram `sendPhoto` client | [`telegram.go`](../internal/notify/telegram.go) |
+| `internal/notify` | Telegram `sendPhoto` and `sendMessage` client | [`telegram.go`](../internal/notify/telegram.go) |
 | `internal/report` | PDF (go-pdf/fpdf) and XLSX (hand-written OOXML) writers | [`pdf.go`](../internal/report/pdf.go), [`xlsx.go`](../internal/report/xlsx.go) |
 | `internal/rosmap` | ROS map_server maps: the flat keys of `map.yaml`, PGM (P5 8/16-bit, P2) and PNG decoding, rendering with the map_server occupancy, the floor plan calibration from origin and resolution | [`yaml.go`](../internal/rosmap/yaml.go), [`image.go`](../internal/rosmap/image.go), [`render.go`](../internal/rosmap/render.go) |
 | `internal/scheduler` | Starts patrols from weekly and one-off schedules | [`scheduler.go`](../internal/scheduler/scheduler.go) |
-| `internal/store` | PostgreSQL access (`database/sql`, `lib/pq`), embedded migrations, models and queries, route CSV parsing, integration feed queries | [`store.go`](../internal/store/store.go), [`models.go`](../internal/store/models.go), [`queries.go`](../internal/store/queries.go), [`users.go`](../internal/store/users.go), [`clients.go`](../internal/store/clients.go), [`feed.go`](../internal/store/feed.go), [`routecsv.go`](../internal/store/routecsv.go), `migrations/` |
+| `internal/store` | PostgreSQL access (`database/sql`, `lib/pq`), embedded migrations, models and queries, route CSV parsing, integration feed queries | [`store.go`](../internal/store/store.go), [`models.go`](../internal/store/models.go), [`queries.go`](../internal/store/queries.go), [`users.go`](../internal/store/users.go), [`clients.go`](../internal/store/clients.go), [`feed.go`](../internal/store/feed.go), [`routecsv.go`](../internal/store/routecsv.go), [`substation.go`](../internal/store/substation.go), `migrations/` |
+| `internal/substation` | Substation inspection ratings: ANSI/NETA MTS Table 100.18 over a similar component and over ambient, rated temperature, partial discharge levels; inspection point checks; site settings ([substation](substation.md)) | [`substation.go`](../internal/substation/substation.go), [`point.go`](../internal/substation/point.go), [`site.go`](../internal/substation/site.go) |
 
 ## Request lifecycle
 
@@ -440,6 +441,8 @@ disables it.
 | `netra.robot.<robot_id>.<type>` | The robot's WebSocket message as received | Every handled robot message |
 | `netra.anomaly.queued` | `{"id", "robot_id", "category"}` (early category) | New anomaly upload |
 | `netra.anomaly.needs_validation`, `.confirmed`, `.dismissed` | `{"id", "robot_id", "category", "confidence"}` | After final detection |
+| `netra.substation.inspection` | `{"id", "point_id", "robot_id", "priority"}` | New substation inspection |
+| `netra.substation.finding.<event>` | `{"id", "priority", "point_id"}` | A finding `opened`, `seen`, `escalated` or read `normal` |
 
 ## Patrol lifecycle and scheduler
 
@@ -587,6 +590,17 @@ north = s·(sin θ·x + cos θ·y) + north_m        (tangent plane at ref_lat, r
   the server keeps `lat` and `lon` in the 5 s telemetry history. Converting map positions happens
   in the dashboard, with the same formulas, so live poses need no server round trip.
 
+## Substation inspection
+
+The module `substation` keeps the site's assets and the inspection points robots take at the stops of
+their routes. At the start of a patrol the robot fetches its route's plan; at each stop it turns its
+camera to each point's pose, captures, and uploads what it measured. The server rates every reading
+([`internal/substation`](../internal/substation/substation.go): ANSI/NETA MTS Table 100.18 for
+thermal targets, site levels for partial discharge) and records the inspection and the findings it
+opens or updates in one transaction; findings at the alert priority go to Telegram from a goroutine,
+so the robot's upload never waits for Telegram. The model, the ratings and the robot protocol are in
+[substation](substation.md).
+
 ## Reports
 
 Reports are generated on request and not stored ([`reports.go`](../internal/api/reports.go),
@@ -600,6 +614,12 @@ built-in category codes are translated, other categories use their rule label. T
 | `GET /api/v1/reports/summary` | `netra-summary.pdf` or, with `format=xlsx`, `netra-summary.xlsx` | Patrol and anomaly counts, anomalies per category (without `rejected` and `dismissed`), daily crowd peak, patrol table |
 | `GET /api/v1/reports/anomalies` | `anomalies.xlsx` | One row per anomaly: early and final detection with confidences, status, position, note, validator |
 | `GET /api/v1/reports/patrols` | `patrols.xlsx` | One row per patrol: robot, start, finish, duration, laps, status, message |
+| `GET /api/v1/reports/substation/findings` | `findings.xlsx` | One row per finding: priority and its action, status, asset, point, target, basis, value, rise, first and last seen, occurrences, who acknowledged and resolved, note |
+| `GET /api/v1/reports/substation/inspections` | `readings.xlsx` | One row per thermal target or pd reading: time, point, target, asset, value, ambient, both rises, priority, basis, pd detection and type, robot, patrol |
+
+With the module `substation`, the patrol report adds an Inspections part after the summary: the
+coverage of the route's plan, every reading with its rise and priority, and up to 12 images of
+rated captures. The PDF fonts have no Δ, so the rise column is titled in words.
 
 PDFs are A4 with a NETRA header band and a footer with the generation time and page numbers; text
 goes through a cp1252 translator for the core Helvetica font. XLSX files are minimal OOXML
@@ -620,6 +640,8 @@ the Prometheus text format, without authentication. Values reset when the proces
 | `netra_robot_battery_percent` | gauge | `robot` | Battery from the 5 s telemetry sample |
 | `netra_anomalies_received_total` | counter | `category` (robot's) | New anomaly uploads |
 | `netra_anomalies_processed_total` | counter | `status` | Anomalies through final detection |
+| `netra_inspections_received_total` | counter | `kind`, `priority` | New substation inspections |
+| `netra_findings_opened_total` | counter | `priority` | Substation findings opened |
 | `netra_ext_requests_total` | counter | `client`, `endpoint` | Integration API requests that passed authentication and the rate limit |
 
 `netra-ai` exposes its own metrics ([AI service](ai-service.md#metrics)).

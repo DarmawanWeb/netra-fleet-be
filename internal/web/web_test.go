@@ -9,37 +9,43 @@ import (
 )
 
 var export = fstest.MapFS{
-	"index.html":           {Data: []byte("index")},
-	"dashboard.html":       {Data: []byte("dashboard")},
-	"dashboard.txt":        {Data: []byte("dashboard payload")},
-	"anomalies.html":       {Data: []byte("anomaly list")},
-	"anomalies/0.html":     {Data: []byte("anomaly detail")},
-	"anomalies/0.txt":      {Data: []byte("anomaly payload")},
-	"robots/0.html":        {Data: []byte("robot detail")},
-	"404.html":             {Data: []byte("not found page")},
-	"_next/static/app.js":  {Data: []byte("js")},
-	"logos/ezra.svg":       {Data: []byte("<svg/>")},
-	"pdf.worker.min.mjs":   {Data: []byte("worker")},
-	"settings/notes.html":  {Data: []byte("nested")},
-	"floor-plans.html":     {Data: []byte("plans")},
-	"floor-plans/index.md": {Data: []byte("not served as a page")},
+	"index.html":                 {Data: []byte("index")},
+	"dashboard.html":             {Data: []byte("dashboard")},
+	"dashboard.txt":              {Data: []byte("dashboard payload")},
+	"anomalies.html":             {Data: []byte("anomaly list")},
+	"anomalies/0.html":           {Data: []byte("anomaly detail")},
+	"anomalies/0.txt":            {Data: []byte("anomaly payload")},
+	"robots/0.html":              {Data: []byte("robot detail")},
+	"substation/findings/0.html": {Data: []byte("finding detail")},
+	"substation/findings/0.txt":  {Data: []byte("finding payload")},
+	"404.html":                   {Data: []byte("not found page")},
+	"_next/static/app.js":        {Data: []byte("js")},
+	"logos/ezra.svg":             {Data: []byte("<svg/>")},
+	"pdf.worker.min.mjs":         {Data: []byte("worker")},
+	"settings/notes.html":        {Data: []byte("nested")},
+	"floor-plans.html":           {Data: []byte("plans")},
+	"floor-plans/index.md":       {Data: []byte("not served as a page")},
 }
 
 func TestResolve(t *testing.T) {
 	cases := map[string]string{
-		"/dashboard":           "dashboard.html",
-		"/dashboard.txt":       "dashboard.txt",
-		"/anomalies":           "anomalies.html",
-		"/anomalies/12":        "anomalies/0.html",
-		"/anomalies/12.txt":    "anomalies/0.txt",
-		"/robots/l1w-01":       "robots/0.html",
-		"/logos/ezra.svg":      "logos/ezra.svg",
-		"/settings/notes":      "settings/notes.html",
-		"/floor-plans":         "floor-plans.html",
-		"/../../etc/passwd":    "",
-		"/patrols/3":           "", // not exported in this fixture
-		"/nope":                "",
-		"/_next/static/app.js": "_next/static/app.js",
+		"/dashboard":                 "dashboard.html",
+		"/dashboard.txt":             "dashboard.txt",
+		"/anomalies":                 "anomalies.html",
+		"/anomalies/12":              "anomalies/0.html",
+		"/anomalies/12.txt":          "anomalies/0.txt",
+		"/robots/l1w-01":             "robots/0.html",
+		"/substation/findings/7":     "substation/findings/0.html",
+		"/substation/findings/7.txt": "substation/findings/0.txt",
+		"/substation/assets/3":       "", // not exported in this fixture
+		"/substation/other/3":        "",
+		"/logos/ezra.svg":            "logos/ezra.svg",
+		"/settings/notes":            "settings/notes.html",
+		"/floor-plans":               "floor-plans.html",
+		"/../../etc/passwd":          "",
+		"/patrols/3":                 "", // not exported in this fixture
+		"/nope":                      "",
+		"/_next/static/app.js":       "_next/static/app.js",
 	}
 	for in, want := range cases {
 		got, ok := Resolve(export, in)

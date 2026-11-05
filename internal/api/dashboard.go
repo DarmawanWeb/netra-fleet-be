@@ -13,6 +13,7 @@ import (
 
 	"github.com/DarmawanWeb/netra-fleet-be/internal/auth"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
@@ -290,6 +291,11 @@ func (s *Server) getPatrol(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, err)
 		return
+	}
+	if s.lic.Has(license.Substation) {
+		if cov, err := s.store.PatrolCoverage(r.Context(), id); err == nil {
+			recap["inspections"] = cov
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"patrol": patrol, "recap": recap})
 }

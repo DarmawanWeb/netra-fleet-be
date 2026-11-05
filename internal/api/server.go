@@ -166,10 +166,42 @@ func (s *Server) Handler() http.Handler {
 	module(license.Crowd, view, "GET /api/v1/crowd/timeline", s.timeline)
 	module(license.Crowd, operate, "POST /api/v1/robots/{id}/people", s.robotPeople)
 
+	// Substation: equipment, inspection points, robot inspections rated after NETA, findings.
+	sub := func(p auth.Permission, pattern string, h http.HandlerFunc) { module(license.Substation, p, pattern, h) }
+	sub(view, "GET /api/v1/substation/summary", s.substationSummary)
+	sub(view, "GET /api/v1/substation/criteria", s.substationCriteria)
+	sub(view, "GET /api/v1/substation/settings", s.getSubstationSettings)
+	sub(configure, "PUT /api/v1/substation/settings", s.putSubstationSettings)
+	sub(view, "GET /api/v1/substation/assets", s.listAssets)
+	sub(configure, "POST /api/v1/substation/assets", s.saveAsset)
+	sub(view, "GET /api/v1/substation/assets/{id}", s.getAsset)
+	sub(configure, "PUT /api/v1/substation/assets/{id}", s.saveAsset)
+	sub(configure, "DELETE /api/v1/substation/assets/{id}", s.deleteAsset)
+	sub(view, "GET /api/v1/substation/points", s.listPoints)
+	sub(configure, "POST /api/v1/substation/points", s.savePoint)
+	sub(view, "GET /api/v1/substation/points/{id}", s.getPoint)
+	sub(configure, "PUT /api/v1/substation/points/{id}", s.savePoint)
+	sub(configure, "DELETE /api/v1/substation/points/{id}", s.deletePoint)
+	sub(view, "GET /api/v1/substation/points/{id}/trend", s.pointTrend)
+	sub(operate, "POST /api/v1/substation/points/{id}/inspect", s.inspectPoint)
+	sub(view, "GET /api/v1/substation/inspections", s.listInspections)
+	sub(view, "GET /api/v1/substation/inspections/{id}", s.getInspection)
+	sub(view, "GET /api/v1/substation/inspections/{id}/image/{name}", s.inspectionImage)
+	sub(view, "GET /api/v1/substation/findings", s.listFindings)
+	sub(view, "GET /api/v1/substation/findings/{id}", s.getFinding)
+	sub(operate, "POST /api/v1/substation/findings/{id}/acknowledge", s.changeFinding(false))
+	sub(operate, "POST /api/v1/substation/findings/{id}/resolve", s.changeFinding(true))
+
 	// Exports and the period summary.
 	module(license.ReportsExport, view, "GET /api/v1/reports/summary", s.summaryReport)
 	module(license.ReportsExport, view, "GET /api/v1/reports/anomalies", s.anomaliesExport)
 	module(license.ReportsExport, view, "GET /api/v1/reports/patrols", s.patrolsExport)
+	// Substation exports need both modules.
+	subReport := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, s.feature(license.ReportsExport, s.feature(license.Substation, s.requireUser(view, h))))
+	}
+	subReport("GET /api/v1/reports/substation/findings", s.findingsExport)
+	subReport("GET /api/v1/reports/substation/inspections", s.inspectionsExport)
 
 	// The audit log page; actions are recorded with or without it.
 	module(license.Audit, auth.PermAudit, "GET /api/v1/audit", s.listAudit)
@@ -192,6 +224,8 @@ func (s *Server) Handler() http.Handler {
 	robot("POST /api/v1/robot/anomalies", s.robotAnomaly)
 	robot("POST /api/v1/robot/routes", s.robotRoute)
 	robot("GET /api/v1/robot/routes/{id}/file", s.routeFile)
+	robot("GET /api/v1/robot/routes/{id}/inspection", s.robotInspectionPlan)
+	robot("POST /api/v1/robot/inspections", s.robotInspectionUpload)
 
 	// The dashboard, when this server serves it (the single-application install).
 	if s.web != nil {

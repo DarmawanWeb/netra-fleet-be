@@ -53,6 +53,14 @@ One image for every client: a signed license decides the edition (mall, substati
 - Robot early detection, then a queue, then `netra-ai` final detection, then a per-category rule:
   confirm at once and send to a Telegram group, or wait for operator validation.
 
+**Substation inspection** (module `substation`, [substation](docs/substation.md))
+- Assets and inspection points on a robot's route: camera pose, thermal regions per component, or
+  partial discharge with an acoustic camera.
+- Every thermal reading rated after ANSI/NETA MTS Table 100.18 (over a similar component or the
+  ambient air, and the rated temperature); partial discharge against site levels.
+- Findings from the first abnormal reading to the repair, with Telegram alerts, trends per
+  component, the inspection part of the patrol report and Excel exports.
+
 **Crowd and reports**
 - Per-minute people cells become heatmaps and hourly and daily peaks.
 - Patrol report PDF (summary, anomaly table and photos, timeline), period summary PDF or Excel,

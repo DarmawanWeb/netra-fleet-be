@@ -20,9 +20,9 @@ core (always)          robots, live map, commands, routes, patrols, schedules, f
 |---|---|---|
 | `anomaly` | `/anomalies`, `/rules`, `/inspection/models`, `POST /robots/{id}/inspection`; the anomaly pipeline | routes 403; robot uploads accepted and dropped |
 | `crowd` | `/crowd/heatmap`, `/crowd/timeline`, `POST /robots/{id}/people` | routes 403; robot `crowd` messages dropped |
-| `substation` | substation inspection: assets, inspection points, thermal ΔT (NETA), partial discharge; its routes come with the module | 403 |
-| `reports.export` | `/reports/summary` (PDF, XLSX), `/reports/anomalies`, `/reports/patrols` | 403; the patrol PDF stays in the core |
-| `alerts.telegram` | Telegram messages for confirmed anomalies | nothing is sent |
+| `substation` | `/substation/...` ([substation](substation.md)): assets, inspection points, thermal ΔT (NETA), partial discharge, findings; robot plans and inspection uploads; the inspection part of the patrol report | routes 403; robot inspections accepted and dropped, plans empty |
+| `reports.export` | `/reports/summary` (PDF, XLSX), `/reports/anomalies`, `/reports/patrols`, `/reports/substation/...` (with `substation`) | 403; the patrol PDF stays in the core |
+| `alerts.telegram` | Telegram messages for confirmed anomalies and substation findings | nothing is sent |
 | `audit` | `GET /audit`, the audit log page | 403; actions are still recorded |
 | `ai.final` | final detection by `netra-ai` (`NETRA_FINAL_DETECTOR_URL`) | the robot's result is final |
 | `integration` | `/api/ext/v1` and `/api/ext/docs`, `/api-clients` | 403 |
