@@ -103,6 +103,7 @@ same `netra-api` process.
 |---|---|---|
 | `cmd/netra-api` | Entry point: wiring, license loading, background goroutines, graceful shutdown | [`main.go`](../cmd/netra-api/main.go) |
 | `cmd/netra-license` | Vendor tool: signing key, issuing and inspecting licenses | [`main.go`](../cmd/netra-license/main.go) |
+| `cmd/netra-license-manager`, `internal/licensemgr` | Vendor web tool, not part of netra-api: clients and deployments, the encrypted signing key, issuing, renewing and verifying licenses, audit log, embedded UI ([license manager](license-manager.md)) | [`main.go`](../cmd/netra-license-manager/main.go), [`store.go`](../internal/licensemgr/store.go), [`key.go`](../internal/licensemgr/key.go), [`issue.go`](../internal/licensemgr/issue.go), [`server.go`](../internal/licensemgr/server.go), `ui/` |
 | `cmd/netra` | The installed application: `serve` and the maintenance commands (`installation-id`, `reset-password`, `backup`, `restore`, `license`, `version`) | [`main.go`](../cmd/netra/main.go) |
 | `internal/app` | The service as one process: database, license, API, dashboard, pipeline, scheduler, backups, TLS | [`app.go`](../internal/app/app.go) |
 | `internal/web` | Serves the dashboard export, built in (`webui` tag) or from a directory | [`web.go`](../internal/web/web.go) |
