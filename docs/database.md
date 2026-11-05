@@ -68,6 +68,7 @@ erDiagram
     }
     floor_plans {
         bigint id PK
+        text kind
         text file_path
         double px_per_m
     }
@@ -137,6 +138,12 @@ erDiagram
         bigint client_pk FK
         timestamptz expires_at
     }
+    geo_site {
+        smallint id PK "always 1"
+        jsonb control_points
+        double scale
+        text basemap
+    }
 ```
 
 | Table | Holds | Written by |
@@ -155,6 +162,8 @@ erDiagram
 | `telemetry` | One history sample per robot every 5 s | Robot WebSocket |
 | `audit_log` | User and integration actions | API ([audit log](architecture.md#audit-log)) |
 | `api_clients`, `api_tokens` | Integration clients and their access tokens | API client routes, `/api/ext/v1/oauth/token` |
+| `license`, `settings` | The license uploaded in the dashboard; the installation ID | License routes, first start |
+| `geo_site` | The georeference of a `gps` deployment: control points, fitted transform, basemap, overlay | Site georeference routes |
 
 ## Migrations
 
@@ -453,6 +462,46 @@ installation.
 | `value` | `TEXT` | Not null |
 | `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
 
+### 008_maps.sql
+
+[`008_maps.sql`](../internal/store/migrations/008_maps.sql) adds the map modes
+([architecture](architecture.md#map-modes)).
+
+**`floor_plans`**, new columns
+
+| Column | Type | Notes |
+|---|---|---|
+| `kind` | `TEXT` | Not null, default `floorplan`; `CHECK` `floorplan` (an uploaded layout) or `pgm` (a robot map) |
+| `resolution_m` | `DOUBLE PRECISION` | `pgm`: metres per pixel from `map.yaml` |
+| `map_origin_x`, `map_origin_y`, `map_origin_yaw` | `DOUBLE PRECISION` | `pgm`: map frame pose of the lower-left pixel from `map.yaml` |
+
+A robot map's `origin_x_px`, `origin_y_px`, `px_per_m` and `rotation_rad` are computed from its
+`map.yaml` at upload and are not changed afterwards (`UPDATE` only touches `kind = 'floorplan'`).
+
+**`geo_site`**, one row
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `SMALLINT` | Primary key, default 1, `CHECK (id = 1)` |
+| `control_points` | `JSONB` | Not null, default `'[]'`; `[{label, x, y, lat, lon}]` |
+| `heading_deg` | `DOUBLE PRECISION` | Compass heading of the map x axis, used with a single control point |
+| `fit_method` | `TEXT` | `points` or `heading`; null until fitted |
+| `ref_lat`, `ref_lon` | `DOUBLE PRECISION` | Reference of the tangent plane (degrees) |
+| `scale`, `rotation_rad`, `east_m`, `north_m` | `DOUBLE PRECISION` | The fitted similarity from map metres to the tangent plane |
+| `rms_m` | `DOUBLE PRECISION` | RMS residual of the fit, metres |
+| `basemap` | `TEXT` | Not null, default `osm`; `CHECK` `osm`, `satellite`, `custom` or `none` |
+| `basemap_url`, `basemap_attribution` | `TEXT` | Not null, default `''`; used by `custom` |
+| `basemap_max_zoom` | `INT` | Not null, default 19 |
+| `overlay_path`, `overlay_type` | `TEXT` | The overlay image on disk and its content type; null without one |
+| `overlay_north`, `overlay_south`, `overlay_east`, `overlay_west` | `DOUBLE PRECISION` | Bounds of the overlay (degrees) |
+| `overlay_opacity` | `DOUBLE PRECISION` | Not null, default 1 |
+| `overlay_updated_at` | `TIMESTAMPTZ` | When the overlay or its bounds last changed |
+| `updated_by` | `TEXT` | Not null, default `''`; username of the last change |
+| `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+**`telemetry`**, new columns `lat` and `lon` (`DOUBLE PRECISION`): the GPS position of a robot
+that reports a fix, for trails and track replay on a `gps` map.
+
 Migrations run under the advisory lock `7151987`, so servers starting on one database at once
 apply them one after the other.
 
@@ -471,7 +520,8 @@ apply them one after the other.
 | Path | Referenced by | Written by |
 |---|---|---|
 | `NETRA_DATA_DIR/anomalies/<YYYY-MM-DD>/<uid>.jpg` | `anomalies.image_path` | Robot anomaly upload; the date is the upload day in the process time zone |
-| `NETRA_DATA_DIR/floorplans/<unix nanoseconds><ext>` | `floor_plans.file_path` | Floor-plan upload; deleted with the plan |
+| `NETRA_DATA_DIR/floorplans/<unix nanoseconds><ext>` | `floor_plans.file_path` | Floor-plan upload, or the PNG rendered from a robot map (`.png`); deleted with the plan |
+| `NETRA_DATA_DIR/geo/overlay-<unix nanoseconds><ext>` | `geo_site.overlay_path` | Overlay upload (`.png`, `.jpg` or `.webp`); deleted when replaced or removed |
 
 The stored paths are built from `NETRA_DATA_DIR` at upload time (relative paths stay relative to
 the working directory). Back up the data directory together with the database, and keep

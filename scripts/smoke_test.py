@@ -120,6 +120,8 @@ check(info['license']['status'] == 'valid' and {'anomaly', 'crowd', 'integration
 check(requests.get(f'{API}/api/v1/branding').json()['name'] == info['branding']['name'], 'branding is public')
 check(info['installation_id'].startswith('NETRA-') and info['map_mode'] == 'floorplan' and info['version'],
       'installation ID, map mode and version')
+check(s.post(f'{API}/api/v1/floorplans/pgm').status_code == 409 and s.get(f'{API}/api/v1/geo').status_code == 409,
+      'robot maps and the site georeference refused on floor plan maps')
 check(requests.get(f'{API}/api/v1/setup').json()['required'] is False, 'setup closed once users exist')
 check(requests.post(f'{API}/api/v1/setup', json={'username': 'intruder', 'password': 'intruder-pass'}).status_code == 409,
       'setup cannot add an admin later')

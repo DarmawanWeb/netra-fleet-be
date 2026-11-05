@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"math"
 	"time"
 
@@ -557,13 +558,17 @@ func (s *Store) CrowdTimeline(ctx context.Context, robotID, bucket, tz string, f
 
 // ---- floor plans
 
-const planCols = `id, name, file_path, content_type, width_px, height_px, origin_x_px, origin_y_px, px_per_m,
-	rotation_rad, created_at`
+const planCols = `id, name, kind, file_path, content_type, width_px, height_px, origin_x_px, origin_y_px, px_per_m,
+	rotation_rad, created_at, resolution_m, map_origin_x, map_origin_y, map_origin_yaw`
 
 func scanPlan(row interface{ Scan(...any) error }) (FloorPlan, error) {
 	var p FloorPlan
-	err := row.Scan(&p.ID, &p.Name, &p.FilePath, &p.ContentType, &p.WidthPx, &p.HeightPx, &p.OriginXPx, &p.OriginYPx,
-		&p.PxPerM, &p.RotationRad, &p.CreatedAt)
+	var ox, oy, yaw sql.NullFloat64
+	err := row.Scan(&p.ID, &p.Name, &p.Kind, &p.FilePath, &p.ContentType, &p.WidthPx, &p.HeightPx, &p.OriginXPx,
+		&p.OriginYPx, &p.PxPerM, &p.RotationRad, &p.CreatedAt, &p.Resolution, &ox, &oy, &yaw)
+	if ox.Valid && oy.Valid {
+		p.Origin = &[3]float64{ox.Float64, oy.Float64, yaw.Float64}
+	}
 	return p, err
 }
 
@@ -572,6 +577,20 @@ func (s *Store) InsertFloorPlan(ctx context.Context, p FloorPlan) (int64, error)
 	var id int64
 	err := s.db.QueryRowContext(ctx, `INSERT INTO floor_plans (name, file_path, content_type, width_px, height_px)
 		VALUES ($1, $2, $3, $4, $5) RETURNING id`, p.Name, p.FilePath, p.ContentType, p.WidthPx, p.HeightPx).Scan(&id)
+	return id, err
+}
+
+// InsertRobotMap stores a robot map: a floor plan of kind pgm with the calibration of its map.yaml.
+func (s *Store) InsertRobotMap(ctx context.Context, p FloorPlan) (int64, error) {
+	if p.Resolution == nil || p.Origin == nil {
+		return 0, errors.New("a robot map needs its resolution and origin")
+	}
+	var id int64
+	err := s.db.QueryRowContext(ctx, `INSERT INTO floor_plans (name, kind, file_path, content_type, width_px, height_px,
+		origin_x_px, origin_y_px, px_per_m, rotation_rad, resolution_m, map_origin_x, map_origin_y, map_origin_yaw)
+		VALUES ($1, 'pgm', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+		p.Name, p.FilePath, p.ContentType, p.WidthPx, p.HeightPx, p.OriginXPx, p.OriginYPx, p.PxPerM, p.RotationRad,
+		*p.Resolution, p.Origin[0], p.Origin[1], p.Origin[2]).Scan(&id)
 	return id, err
 }
 
@@ -599,10 +618,11 @@ func (s *Store) GetFloorPlan(ctx context.Context, id int64) (FloorPlan, error) {
 	return p, notFound(err)
 }
 
-// CalibrateFloorPlan stores the map-to-plan transform and plan size.
+// CalibrateFloorPlan stores the map-to-plan transform and plan size; robot maps keep the
+// calibration of their map.yaml (ErrNotFound).
 func (s *Store) CalibrateFloorPlan(ctx context.Context, p FloorPlan) error {
 	return s.execOne(ctx, `UPDATE floor_plans SET name = $2, width_px = $3, height_px = $4, origin_x_px = $5,
-		origin_y_px = $6, px_per_m = $7, rotation_rad = $8 WHERE id = $1`,
+		origin_y_px = $6, px_per_m = $7, rotation_rad = $8 WHERE id = $1 AND kind = 'floorplan'`,
 		p.ID, p.Name, p.WidthPx, p.HeightPx, p.OriginXPx, p.OriginYPx, p.PxPerM, p.RotationRad)
 }
 

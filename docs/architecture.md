@@ -13,7 +13,7 @@ the [Netra](https://github.com/DarmawanWeb/Netra) repository.
 | `netra` / `netra-api` | this repository: [`cmd/netra`](../cmd/netra/main.go) (installers), [`cmd/netra-api`](../cmd/netra-api/main.go) (Docker), [`internal/app`](../internal/app/app.go) | One service: dashboard REST and WebSocket API, the dashboard itself (when built in), robot gateway, anomaly pipeline with built-in Ollama detection, scheduler, reports, integration API, backups, metrics |
 | `netra-ai` | this repository: [`ai/`](../ai/netra_ai/main.py) | Final anomaly detection with a vision-language model on Ollama ([AI service](ai-service.md)) |
 | PostgreSQL / TimescaleDB | deployment | All state; `netra-api` applies its own migrations ([database](database.md)) |
-| `NETRA_DATA_DIR` | `netra-api` volume | Anomaly photos and floor-plan files |
+| `NETRA_DATA_DIR` | `netra-api` volume | Anomaly photos, floor-plan files, rendered robot maps and the site overlay |
 | NATS | deployment, optional | Receives the domain events `netra-api` publishes; nothing in this repository subscribes |
 | Ollama | deployment | Runs the vision-language model for `netra-ai` |
 | Robots | [Pashupati](https://github.com/DarmawanRobotics/Pashupati/blob/main/src/robot_fleet/API.md) | Connect with a robot token: WebSocket for telemetry, events and commands, HTTPS for uploads |
@@ -31,7 +31,7 @@ flowchart LR
     ai["netra-ai<br/>FastAPI"]
     ollama["Ollama<br/>vision-language model"]
     db[("PostgreSQL / TimescaleDB")]
-    files[("NETRA_DATA_DIR<br/>photos, floor plans")]
+    files[("NETRA_DATA_DIR<br/>photos, floor plans, maps")]
     nats["NATS"]
     tg["Telegram Bot API"]
     prom["Prometheus, Grafana"]
@@ -112,18 +112,20 @@ same `netra-api` process.
 | `internal/tlsutil` | Self-signed certificate for HTTPS on a local network | [`tlsutil.go`](../internal/tlsutil/tlsutil.go) |
 | `internal/sysinfo` | Disk space and data size for the system page | [`sysinfo.go`](../internal/sysinfo/sysinfo.go) |
 | `internal/version` | Build version, set by the release build | [`version.go`](../internal/version/version.go) |
-| `internal/api` | Dashboard REST API and live feed, robot gateway (WebSocket, uploads), commands and acks, clock-skew correction, anomaly pipeline, patrol start, report endpoints, users and sessions, audit, integration-client admin | [`server.go`](../internal/api/server.go) (routes, middleware, helpers), [`dashboard.go`](../internal/api/dashboard.go), [`robot.go`](../internal/api/robot.go), [`robotcontrol.go`](../internal/api/robotcontrol.go), [`clock.go`](../internal/api/clock.go), [`pipeline.go`](../internal/api/pipeline.go), [`reports.go`](../internal/api/reports.go), [`users.go`](../internal/api/users.go), [`clients.go`](../internal/api/clients.go) |
+| `internal/api` | Dashboard REST API and live feed, robot gateway (WebSocket, uploads), commands and acks, clock-skew correction, anomaly pipeline, patrol start, report endpoints, users and sessions, audit, integration-client admin, map modes (robot maps, site georeference) | [`server.go`](../internal/api/server.go) (routes, middleware, helpers), [`dashboard.go`](../internal/api/dashboard.go), [`robot.go`](../internal/api/robot.go), [`robotcontrol.go`](../internal/api/robotcontrol.go), [`clock.go`](../internal/api/clock.go), [`pipeline.go`](../internal/api/pipeline.go), [`reports.go`](../internal/api/reports.go), [`users.go`](../internal/api/users.go), [`clients.go`](../internal/api/clients.go), [`maps.go`](../internal/api/maps.go) |
 | `internal/auth` | PBKDF2-SHA256 password hashes, random tokens and their SHA-256 digests, roles and permissions | [`auth.go`](../internal/auth/auth.go), [`rbac.go`](../internal/auth/rbac.go) |
 | `internal/bus` | Publish-only NATS client over the core text protocol, reconnects lazily | [`nats.go`](../internal/bus/nats.go) |
 | `internal/config` | Environment variables into `config.Config` | [`config.go`](../internal/config/config.go) |
 | `internal/detect` | `Detector` interface, `PassThrough`, `HTTP` client for `netra-ai` | [`detect.go`](../internal/detect/detect.go) |
 | `internal/ext` | Integration API `/api/ext/v1`: client credentials, scopes, rate limits, anomaly change feed, fleet data, embedded OpenAPI and Swagger UI | [`ext.go`](../internal/ext/ext.go), [`token.go`](../internal/ext/token.go), [`anomalies.go`](../internal/ext/anomalies.go), [`fleet.go`](../internal/ext/fleet.go), [`limit.go`](../internal/ext/limit.go), [`docs.go`](../internal/ext/docs.go), [`docs/openapi.yaml`](../internal/ext/docs/openapi.yaml) |
+| `internal/geo` | Georeference: the similarity transform from the robot map frame to WGS84 through the local tangent plane, its least-squares fit from control points or one point and a heading, residuals | [`geo.go`](../internal/geo/geo.go), [`fit.go`](../internal/geo/fit.go) |
 | `internal/hub` | Robot and dashboard WebSocket connections: one writer goroutine each, keep-alive pings, broadcast | [`hub.go`](../internal/hub/hub.go) |
 | `internal/license` | Signed licenses: editions, tiers and feature modules, Ed25519 verification against the built-in keys, status with grace period, branding | [`license.go`](../internal/license/license.go), [`state.go`](../internal/license/state.go), [`keys/`](../internal/license/keys/README.md) |
 | `internal/i18n` | English and Indonesian texts for reports and Telegram captions, category labels | [`i18n.go`](../internal/i18n/i18n.go) |
 | `internal/metrics` | Minimal Prometheus registry (counters, gauges) and the HTTP middleware | [`metrics.go`](../internal/metrics/metrics.go) |
 | `internal/notify` | Telegram `sendPhoto` client | [`telegram.go`](../internal/notify/telegram.go) |
 | `internal/report` | PDF (go-pdf/fpdf) and XLSX (hand-written OOXML) writers | [`pdf.go`](../internal/report/pdf.go), [`xlsx.go`](../internal/report/xlsx.go) |
+| `internal/rosmap` | ROS map_server maps: the flat keys of `map.yaml`, PGM (P5 8/16-bit, P2) and PNG decoding, rendering with the map_server occupancy, the floor plan calibration from origin and resolution | [`yaml.go`](../internal/rosmap/yaml.go), [`image.go`](../internal/rosmap/image.go), [`render.go`](../internal/rosmap/render.go) |
 | `internal/scheduler` | Starts patrols from weekly and one-off schedules | [`scheduler.go`](../internal/scheduler/scheduler.go) |
 | `internal/store` | PostgreSQL access (`database/sql`, `lib/pq`), embedded migrations, models and queries, route CSV parsing, integration feed queries | [`store.go`](../internal/store/store.go), [`models.go`](../internal/store/models.go), [`queries.go`](../internal/store/queries.go), [`users.go`](../internal/store/users.go), [`clients.go`](../internal/store/clients.go), [`feed.go`](../internal/store/feed.go), [`routecsv.go`](../internal/store/routecsv.go), `migrations/` |
 
@@ -136,6 +138,8 @@ http.Server                 ReadHeaderTimeout 10 s
       └─ http.ServeMux      Go 1.22 patterns, e.g. "GET /api/v1/robots/{id}/track"
          ├─ no auth         GET /healthz, POST /api/v1/auth/login, GET /metrics, GET /api/v1/branding[/logo]
          ├─ feature         module routes: 403 "feature not licensed" unless the license has the module
+         │  └─ requireUser
+         ├─ mapModes        map routes: 409 "this deployment uses <mode> maps" in another map mode
          │  └─ requireUser
          ├─ requireUser     dashboard routes, one permission each
          ├─ requireRobot    /api/v1/robot/... routes
@@ -250,7 +254,7 @@ are dropped before these steps.
 | `type` | Fields the server reads | Effect |
 |---|---|---|
 | `hello` | none | Only the common steps |
-| `telemetry` | `ts`, `pose {x, y, yaw}`, `mode`, `nav.state`, `battery.pct`, `people`, `health {cpu_percent, gpu_percent, memory_percent, memory_used_gb, memory_total_gb, cpu_temp_c}`, `patrol_id` | Measures the clock offset from `ts`; stores the whole message in `robots.last_telemetry` and sets `last_seen`; at most once per 5 s per robot writes a `telemetry` history row and sets `netra_robot_battery_percent` |
+| `telemetry` | `ts`, `pose {x, y, yaw}`, `gps {lat, lon, fix}`, `mode`, `nav.state`, `battery.pct`, `people`, `health {cpu_percent, gpu_percent, memory_percent, memory_used_gb, memory_total_gb, cpu_temp_c}`, `patrol_id` | Measures the clock offset from `ts`; stores the whole message in `robots.last_telemetry` and sets `last_seen`; at most once per 5 s per robot writes a `telemetry` history row (with the GPS position when there is a fix) and sets `netra_robot_battery_percent` |
 | `patrol_event` | `event`, `lap`, `reason`, `patrol_id` | With a patrol ID: `started` sets the patrol `running`, `lap` raises `laps`, `finished` sets `finished` with `reason` as message; always stored in `events` |
 | `stop_event`, `alert` | `patrol_id` | Stored in `events` as received |
 | `crowd` | `ts_start`, `ts_end`, `cell_size`, `cells`, `peak_people`, `patrol_id` | Stored in `crowd_samples` with corrected times |
@@ -506,6 +510,82 @@ size in metres, `cells` as `[ix, iy, count]` triples and `peak_people`. Each mes
   (average count over the samples that contain the cell, two decimals) and `samples`.
 - `GET /api/v1/crowd/timeline`: the highest `peak_people` per hour or day, truncated in `NETRA_TZ`.
 - The patrol recap and the summary report use the same data (crowd peak per patrol, daily peaks).
+
+## Map modes
+
+The license fixes the map mode ([licensing](licensing.md#map-mode)); `license.State.MapMode()` reads
+it, `floorplan` without a license, and it stays after the license expires. The modes share one
+idea: robot positions, routes, anomalies and crowd cells stay in the robot's map frame (metres),
+and each mode only changes how that frame is drawn.
+
+| Mode | Base layer | Placed by | Routes only in this mode |
+|---|---|---|---|
+| `floorplan` | An uploaded layout (SVG, PNG, JPG, PDF) | A calibration set by hand in the dashboard | `POST /api/v1/floorplans` |
+| `pgm` | The robot's occupancy grid, rendered to PNG | Its `map.yaml` (origin and resolution) | `POST /api/v1/floorplans/pgm` |
+| `gps` | Map tiles and/or an aerial image, in WGS84 | A transform fitted from control points | `/api/v1/geo...` |
+
+`Server.Handler` registers those routes with `mapped(modes, ...)`, which wraps them in
+`mapModes` before `requireUser` (like `module` for licensed modules): another mode answers
+`409 {"error": "this deployment uses <mode> maps", "map_mode": "<mode>"}`. Everything else about
+floor plans (listing, files, assigning a plan to a robot, deleting, calibrating a plan of kind
+`floorplan`) works in every mode, so plans made before a license changed the mode stay usable.
+
+### Robot maps (`pgm`)
+
+`POST /api/v1/floorplans/pgm` ([`maps.go`](../internal/api/maps.go)) takes the two files
+`map_saver` writes and stores a floor plan of kind `pgm`:
+
+1. [`rosmap.ParseYAML`](../internal/rosmap/yaml.go) reads the flat keys of `map.yaml` with a small
+   line parser (no YAML library): `image`, `resolution`, `origin` as `[x, y, yaw]` (flow or block
+   list), `negate`, `occupied_thresh`, `free_thresh`, `mode`. Comments, quotes, a byte order mark
+   and CRLF line ends are accepted; errors name the line.
+2. [`rosmap.Decode`](../internal/rosmap/image.go) reads the image: PGM P5 with 8-bit or
+   big-endian 16-bit samples, plain P2, or PNG (the mean of red, green and blue, and its alpha), at
+   most 10 000 px a side and 64 megapixels.
+3. [`rosmap.Render`](../internal/rosmap/render.go) computes the occupancy of each pixel as nav2
+   map_server does (`occ = 1 − value/maxval`, or `value/maxval` with `negate`): in `trinary` mode
+   occupied above `occupied_thresh`, free below `free_thresh`, unknown between; `scale` mode
+   shades the values between (and makes transparent pixels unknown); `raw` mode takes the value as
+   the occupancy. It writes a paletted PNG: free `#f1f5f9`, occupied `#1e293b`, unknown `#b4bdca`,
+   shades between free and occupied. The dashboard shows it as is in the light theme and inverted
+   with the hue kept in the dark one (free a deep navy, walls pale).
+4. `Meta.Calibration` turns origin and resolution into the floor plan calibration, so the plan
+   formula of [api.md](api.md#floor-plans) puts a map position exactly on its pixel (pixel `i`
+   covers `i` to `i + 1`, the lower-left corner of the image is the yaml origin).
+5. The PNG goes to `NETRA_DATA_DIR/floorplans/<unix ns>.png` and the row keeps `resolution_m` and
+   the origin for display. `PUT /api/v1/floorplans/{id}` refuses a robot map (409).
+
+### Site georeference (`gps`)
+
+[`internal/geo`](../internal/geo/geo.go) places the map frame on the earth with a 2D similarity
+from map metres to east/north metres in the tangent plane at a reference point, followed by the
+exact conversion between that plane and the WGS84 ellipsoid (through earth-centred coordinates):
+
+```text
+east  = s·(cos θ·x − sin θ·y) + east_m
+north = s·(sin θ·x + cos θ·y) + north_m        (tangent plane at ref_lat, ref_lon)
+```
+
+- **Fit.** With two or more control points, the reference is the point of the ellipsoid under
+  the mean of their earth-centred positions (also across the antimeridian), their latitude and
+  longitude become tangent-plane positions, and the four parameters are the closed-form least
+  squares solution with both point sets centred. With one point and a heading, the point is the
+  reference, the scale 1 and the rotation `90° − heading`.
+- **Checks** (400 from the API): fewer than two points without a heading, all points at one map
+  position or one latitude/longitude (spread under 1 cm), a scale outside 0.5 to 2, points more
+  than 20 km from their centre, more than 64 points, values that are not numbers or not on the
+  earth.
+- **Residuals** are the ground distances between each point and where the fit puts its map
+  position, and their RMS. Two points always fit exactly; a third shows how good the fit is.
+- **Storage.** `PUT /api/v1/geo` stores the points, the optional heading, the fitted parameters,
+  the RMS and the basemap in the single row of `geo_site`; `GET` recomputes the residuals from the
+  stored transform. `POST /api/v1/geo/fit` fits without storing, for the dashboard to show the
+  residuals while points are edited. The overlay image goes to
+  `NETRA_DATA_DIR/geo/overlay-<unix ns>.<ext>`; replacing or deleting it removes the old file.
+  Every change broadcasts `{"type": "geo"}` so open dashboards reload the site.
+- **Robots** may send their own `gps` position in telemetry ([api.md](api.md#gps-in-telemetry));
+  the server keeps `lat` and `lon` in the 5 s telemetry history. Converting map positions happens
+  in the dashboard, with the same formulas, so live poses need no server round trip.
 
 ## Reports
 

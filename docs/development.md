@@ -64,13 +64,22 @@ fake store.
 |---|---|
 | [`internal/api/clock_test.go`](../internal/api/clock_test.go) | Clock-skew correction |
 | [`internal/api/command_test.go`](../internal/api/command_test.go) | Command names accepted by `POST /robots/{id}/command` |
+| [`internal/api/maps_test.go`](../internal/api/maps_test.go) | Map mode gating of uploads and the georeference with test licenses, basemap and control point validation, robot map upload refusals, overlay bounds, GPS in telemetry |
 | [`internal/api/robotcontrol_test.go`](../internal/api/robotcontrol_test.go) | `set_inspection` and `set_people`: ack, refusal, timeout, validation |
 | [`internal/api/route_test.go`](../internal/api/route_test.go) | Route CSV parsing |
 | [`internal/auth/auth_test.go`](../internal/auth/auth_test.go) | Password hashes, token digests, PBKDF2 key derivation vectors |
+| [`internal/backup/backup_test.go`](../internal/backup/backup_test.go) | `pg_dump` called with the password in `PGPASSWORD`, not on the command line; retention pruning; listing; refused names |
+| [`internal/detect/ollama_test.go`](../internal/detect/ollama_test.go) | Built-in Ollama detection: answer normalisation, the prompt, downscaling, the request to a test Ollama, an unreachable model |
 | [`internal/ext/ext_test.go`](../internal/ext/ext_test.go) | Token endpoint, lockout, scopes, rate limit, change feed and cursor, photos, routes, OpenAPI and Swagger UI |
-| [`internal/report/pdf_test.go`](../internal/report/pdf_test.go), [`xlsx_test.go`](../internal/report/xlsx_test.go) | PDF and XLSX output |
+| [`internal/geo/geo_test.go`](../internal/geo/geo_test.go) | Transform round trip and ground distances, least-squares fit recovering a known rotation, scale and translation, residuals, one point with a heading, degenerate input, the antimeridian |
 | [`internal/licensemgr`](../internal/licensemgr/) | License manager: file store round trips, modes and schema check, folder lock, audit tail; key encryption, wrong passphrase, tampering, idle lock; building and validating licenses; HTTP login, CSRF, throttling, and the issue, renew, change and verify flows against `license.Verify` |
+| [`internal/pgmanaged/pgmanaged_test.go`](../internal/pgmanaged/pgmanaged_test.go) | A real private cluster: create, start, reuse by a second process, stop, restart; refused as root. Needs `NETRA_TEST_PG_BIN` and a regular user, else skipped |
+| [`internal/report/pdf_test.go`](../internal/report/pdf_test.go), [`xlsx_test.go`](../internal/report/xlsx_test.go) | PDF and XLSX output |
+| [`internal/rosmap/rosmap_test.go`](../internal/rosmap/rosmap_test.go) | `map.yaml` parsing (nav2 and ROS 1 forms, errors with lines), PGM P5 8/16-bit and P2, PNG, occupancy with negate and the three modes, rendering, the calibration putting map cells on their pixels |
 | [`internal/scheduler/scheduler_test.go`](../internal/scheduler/scheduler_test.go) | `Due` for weekly, one-off and disabled schedules |
+| [`internal/sysinfo/sysinfo_test.go`](../internal/sysinfo/sysinfo_test.go) | Data size with a file limit, disk space |
+| [`internal/tlsutil/tlsutil_test.go`](../internal/tlsutil/tlsutil_test.go) | Self-signed certificate: names and addresses, key permissions, kept when it exists |
+| [`internal/web/web_test.go`](../internal/web/web_test.go) | Dashboard export routing (pages, detail fallback and payloads), the redirect of `/`, caching and security headers, JSON 404 for `/api/`, methods |
 | [`ai/tests/test_ai.py`](../ai/tests/test_ai.py) | Answer normalisation, prompt, `/detect` with a mocked Ollama, unreadable images |
 
 SQL queries, migrations and the complete robot flow are only exercised by the smoke test.
@@ -149,7 +158,8 @@ What it checks, in order:
    crowd timeline, schedule saved, 401 without login.
 6. Reports: patrol PDF, summary PDF and XLSX, anomaly and patrol XLSX; track history.
 7. Robot control: e-stop reaches the robot, `/info` with every module licensed, public branding,
-   the license page, a forged license refused (400), inspection models, `set_inspection` acked (200),
+   the license page, a forged license refused (400), robot map uploads and the site georeference
+   refused on floor plan maps (409), inspection models, `set_inspection` acked (200),
    `set_people` refused (422), unknown model (400), robot load stored in the telemetry history.
 8. Clock skew: telemetry two hours behind, anomaly time moved onto server time, `clock_skew_s` about
    7200.
@@ -169,7 +179,7 @@ request.
 
 | Job | Environment | Steps |
 |---|---|---|
-| `api` | `ubuntu-latest` with a `timescale/timescaledb:latest-pg16` service (user, password and database `netra`, port 5432, `pg_isready` health check) | Checkout; Go 1.22; golangci-lint v1.61 through `golangci/golangci-lint-action@v6`; `go test -race ./...`; smoke test: build `netra-api`, start it in the background with `NETRA_ADMIN_PASSWORD=admin`, the service database and `NETRA_DATA_DIR=/tmp/netra-data`, wait 3 s, install `requests` and `websocket-client`, run `scripts/smoke_test.py` with a throwaway key: `netra-license keygen`, a build trusting that key (`-ldflags -X .../license.BuildKey=...`), a license of every module in `NETRA_LICENSE_FILE`; then the release build on `:8081` without a license and `scripts/smoke_unlicensed.py` (core only, one robot); then the CI build on an empty database `netra_setup` without `NETRA_ADMIN_PASSWORD` and `scripts/smoke_setup.py` (first-run setup, a license bound to the installation) |
+| `api` | `ubuntu-latest` with a `timescale/timescaledb:latest-pg16` service (user, password and database `netra`, port 5432, `pg_isready` health check) | Checkout; Go 1.22; golangci-lint v1.61 through `golangci/golangci-lint-action@v6`; `go test -race ./...`; smoke test: build `netra-api`, start it in the background with `NETRA_ADMIN_PASSWORD=admin`, the service database and `NETRA_DATA_DIR=/tmp/netra-data`, wait 3 s, install `requests` and `websocket-client`, run `scripts/smoke_test.py` with a throwaway key: `netra-license keygen`, a build trusting that key (`-ldflags -X .../license.BuildKey=...`), a license of every module in `NETRA_LICENSE_FILE`; then the release build on `:8081` without a license and `scripts/smoke_unlicensed.py` (core only, one robot); then the CI build on an empty database `netra_setup` without `NETRA_ADMIN_PASSWORD` and `scripts/smoke_setup.py` (first-run setup, a license bound to the installation, the site georeference of its GPS map) |
 | `ai` | `ubuntu-latest`, working directory `ai` | Python 3.12; `pip install -e ".[dev]"`; `ruff check .` and `ruff format --check .`; `python -m pytest -q` |
 | `images` | `ubuntu-latest`, push events only, after `api` and `ai` passed | Matrix `netra-api` (context `.`) and `netra-ai` (context `ai`): Buildx, login to `ghcr.io` with `GITHUB_TOKEN`, tags from `docker/metadata-action`, build and push for `linux/amd64` and `linux/arm64`, GitHub Actions cache per image |
 

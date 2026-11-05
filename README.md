@@ -104,7 +104,8 @@ Dashboard side, with a Bearer session token (the full reference is [docs/api.md]
 | GET / POST | `/api/v1/anomalies[/{id}][/image]`, `/api/v1/anomalies/{id}/validate` | view / operate |
 | GET / PUT, DELETE | `/api/v1/rules[/{category}]` | view / configure |
 | GET | `/api/v1/crowd/heatmap`, `/api/v1/crowd/timeline` | view |
-| GET / POST, PUT, DELETE | `/api/v1/floorplans[/{id}][/file]` | view / configure |
+| GET / POST, PUT, DELETE | `/api/v1/floorplans[/{id}][/file]`, `POST /api/v1/floorplans/pgm` (robot map: `map.yaml` + `map.pgm`) | view / configure |
+| GET / PUT, POST, DELETE | `/api/v1/geo` (site georeference of a `gps` deployment), `POST /api/v1/geo/fit`, `/api/v1/geo/overlay[/file]` | view / configure |
 | GET | `/api/v1/reports/patrols/{id}/pdf`, `/api/v1/reports/summary?format=pdf\|xlsx`, `/api/v1/reports/anomalies`, `/api/v1/reports/patrols` | view |
 | GET, POST, PUT, DELETE | `/api/v1/users[/{id}]`, `/api/v1/users/{id}/password` | users |
 | GET | `/api/v1/audit` | audit |

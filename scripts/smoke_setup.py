@@ -50,6 +50,21 @@ info = requests.get(f'{API}/api/v1/info', headers=auth).json()
 check(info['license']['status'] == 'valid' and info['license']['installation'] == installation, 'bound license installed')
 check(info['map_mode'] == 'gps' and 'substation' in info['features'], 'substation edition: GPS map, substation module')
 
+# GPS maps: the site georeference instead of floor plan uploads
+GEO = f'{API}/api/v1/geo'
+check(requests.get(GEO, headers=auth).json()['transform'] is None, 'site not georeferenced yet')
+points = [{'label': 'Gate', 'x': 0, 'y': 0, 'lat': -6.2, 'lon': 106.816},
+          {'label': 'T1', 'x': 60, 'y': 0, 'lat': -6.19973, 'lon': 106.81647},
+          {'label': 'Control room', 'x': 0, 'y': 40, 'lat': -6.19969, 'lon': 106.81582}]
+r = requests.put(GEO, headers=auth, json={'points': points, 'basemap': {'kind': 'satellite'}})
+fit = r.json().get('transform') or {}
+check(r.status_code == 200 and fit.get('method') == 'points' and 0.99 < fit['scale'] < 1.01 and fit['rms_m'] < 0.5,
+      f"site georeferenced (rms {fit.get('rms_m', 0):.2f} m)")
+check(requests.get(GEO, headers=auth).json()['basemap']['kind'] == 'satellite', 'basemap saved')
+check(requests.put(GEO, headers=auth, json={'points': points[:1]}).status_code == 400, 'one point without a heading refused')
+r = requests.post(f'{API}/api/v1/floorplans', headers=auth, files={'file': ('a.svg', b'<svg/>', 'image/svg+xml')})
+check(r.status_code == 409 and r.json()['map_mode'] == 'gps', 'floor plan upload refused on GPS maps')
+
 check(requests.post(SETUP, json={'username': 'second', 'password': 'second-pass'}).status_code == 409,
       'setup closes after the first admin')
 check(requests.get(SETUP).json()['required'] is False, 'setup no longer required')
