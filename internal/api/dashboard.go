@@ -13,6 +13,8 @@ import (
 
 	"github.com/DarmawanWeb/netra-fleet-be/internal/auth"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
@@ -54,14 +56,15 @@ func (s *Server) listRobots(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]robotView, len(robots))
 	for i, rb := range robots {
-		out[i] = robotView{Robot: rb, Online: s.hub.Online(rb.ID), ClockSkewS: s.clockSkew(rb.ID)}
+		out[i] = robotView{Robot: rb, Online: s.relay.Online(rb.ID), ClockSkewS: skewSeconds(s.relay.ClockSkew(rb.ID))}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// info tells the dashboard how robots reach this command center (Settings, robot registration).
+// info tells the dashboard how robots reach this command center (Settings, robot registration)
+// and what the license includes (the pages it shows, the product's name and colours).
 func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"public_url": s.cfg.PublicURL, "time_zone": s.cfg.TimeZone.String()})
+	writeJSON(w, http.StatusOK, s.infoView())
 }
 
 func (s *Server) createRobot(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +75,18 @@ func (s *Server) createRobot(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Name == "" {
 		body.Name = body.ID
+	}
+	if limit := s.robotLimit(); limit > 0 {
+		n, err := s.store.CountRobots(r.Context())
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if n >= limit {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "robot limit of the license reached",
+				"robot_limit": limit})
+			return
+		}
 	}
 	token := auth.NewToken()
 	if err := s.store.CreateRobot(r.Context(), body.ID, body.Name, auth.HashToken(token)); err != nil {
@@ -129,7 +144,7 @@ func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name must be pause, resume, localize, stop_patrol, estop or estop_release")
 		return
 	}
-	id, err := s.sendCommand(r.PathValue("id"), body.Name, body.Args, 0)
+	id, err := s.sendCommand(r.Context(), r.PathValue("id"), body.Name, body.Args, 0)
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -278,6 +293,11 @@ func (s *Server) getPatrol(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	if s.lic.Has(license.Substation) {
+		if cov, err := s.store.PatrolCoverage(r.Context(), id); err == nil {
+			recap["inspections"] = cov
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"patrol": patrol, "recap": recap})
 }
 
@@ -288,7 +308,7 @@ func (s *Server) stopPatrol(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if _, err := s.sendCommand(patrol.RobotID, "stop_patrol", nil, id); err != nil {
+	if _, err := s.sendCommand(r.Context(), patrol.RobotID, "stop_patrol", nil, id); err != nil {
 		_ = s.store.PatrolStatus(r.Context(), id, "stopped", "robot offline")
 	}
 	w.WriteHeader(http.StatusAccepted)
@@ -357,9 +377,9 @@ func (s *Server) validateAnomaly(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status == "confirmed" {
-		go s.notifyConfirmed(id)
+		s.relay.Alert(relay.Alert{Kind: relay.AlertAnomaly, ID: id})
 	}
-	s.hub.Broadcast(map[string]any{"type": "anomaly", "id": id, "status": status})
+	s.relay.Broadcast(map[string]any{"type": "anomaly", "id": id, "status": status})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -487,6 +507,15 @@ func (s *Server) calibrateFloorPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.ID, _ = pathID(r)
+	cur, err := s.store.GetFloorPlan(r.Context(), p.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if cur.Kind == store.PlanPGM {
+		writeError(w, http.StatusConflict, "a robot map is placed by its map.yaml and cannot be calibrated")
+		return
+	}
 	if err := s.store.CalibrateFloorPlan(r.Context(), p); err != nil {
 		fail(w, err)
 		return

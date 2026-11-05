@@ -53,6 +53,9 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// DeriveKey derives a 32-byte key (one PBKDF2-SHA256 block) from a passphrase, e.g. an AES-256 key.
+func DeriveKey(passphrase, salt []byte, iter int) []byte { return pbkdf2(passphrase, salt, iter) }
+
 func pbkdf2(password, salt []byte, iter int) []byte {
 	mac := hmac.New(sha256.New, password)
 	mac.Write(salt)

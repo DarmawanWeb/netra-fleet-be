@@ -48,6 +48,14 @@ erDiagram
     robots ||--o{ events : reports
     patrols |o--o{ events : "reported during"
     api_clients ||--o{ api_tokens : issues
+    assets |o--o{ inspection_points : "measured at"
+    routes |o--o{ inspection_points : "stops at"
+    inspection_points ||--o{ inspections : "captured at"
+    robots |o--o{ inspections : uploads
+    patrols |o--o{ inspections : "taken during"
+    inspection_points ||--o{ findings : "deficiency of"
+    assets |o--o{ findings : concerns
+    inspections ||--o{ findings : "first and last seen in"
 
     users {
         bigint id PK
@@ -68,6 +76,7 @@ erDiagram
     }
     floor_plans {
         bigint id PK
+        text kind
         text file_path
         double px_per_m
     }
@@ -137,6 +146,42 @@ erDiagram
         bigint client_pk FK
         timestamptz expires_at
     }
+    geo_site {
+        smallint id PK "always 1"
+        jsonb control_points
+        double scale
+        text basemap
+    }
+    assets {
+        bigint id PK
+        text tag UK
+        text kind
+        boolean archived
+    }
+    inspection_points {
+        bigint id PK
+        text kind
+        bigint asset_id FK
+        bigint route_id FK
+        int stop_index
+        jsonb targets
+    }
+    inspections {
+        bigint id PK
+        text uid UK
+        bigint point_id FK
+        text robot_id FK
+        bigint patrol_id FK
+        smallint priority
+    }
+    findings {
+        bigint id PK
+        bigint point_id FK
+        text target_key
+        bigint asset_id FK
+        text status
+        smallint priority
+    }
 ```
 
 | Table | Holds | Written by |
@@ -155,6 +200,11 @@ erDiagram
 | `telemetry` | One history sample per robot every 5 s | Robot WebSocket |
 | `audit_log` | User and integration actions | API ([audit log](architecture.md#audit-log)) |
 | `api_clients`, `api_tokens` | Integration clients and their access tokens | API client routes, `/api/ext/v1/oauth/token` |
+| `license`, `settings` | The license uploaded in the dashboard; the installation ID | License routes, first start |
+| `geo_site` | The georeference of a `gps` deployment: control points, fitted transform, basemap, overlay | Site georeference routes |
+| `assets`, `inspection_points` | Substation equipment and where robots inspect it | Substation routes |
+| `inspections` | Thermal and partial discharge captures with their ratings | Robot inspection uploads |
+| `findings` | Deficiencies from their first abnormal reading until resolved | Robot inspection uploads, acknowledge and resolve routes |
 
 ## Migrations
 
@@ -426,6 +476,159 @@ clients, their tokens, and the change feed column on `anomalies`.
 - Index `anomalies_updated (updated_at, id)` serves the feed's keyset condition
   `(updated_at, id) > (cursor)` ([`feed.go`](../internal/store/feed.go)).
 
+### 006_license.sql
+
+[`006_license.sql`](../internal/store/migrations/006_license.sql) keeps the license uploaded in the
+dashboard ([licensing](licensing.md#installing-a-license)).
+
+**`license`**, one row
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `SMALLINT` | Primary key, default 1, `CHECK (id = 1)` |
+| `text` | `TEXT` | Not null; the signed license `NETRA-LIC-1...`, verified again at every start |
+| `uploaded_by` | `TEXT` | Not null, default `''`; username |
+| `uploaded_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+### 007_settings.sql
+
+[`007_settings.sql`](../internal/store/migrations/007_settings.sql) adds the settings of the
+installation.
+
+**`settings`**
+
+| Column | Type | Notes |
+|---|---|---|
+| `key` | `TEXT` | Primary key; `installation_id` holds the installation ID licenses are bound to |
+| `value` | `TEXT` | Not null |
+| `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+### 008_maps.sql
+
+[`008_maps.sql`](../internal/store/migrations/008_maps.sql) adds the map modes
+([architecture](architecture.md#map-modes)).
+
+**`floor_plans`**, new columns
+
+| Column | Type | Notes |
+|---|---|---|
+| `kind` | `TEXT` | Not null, default `floorplan`; `CHECK` `floorplan` (an uploaded layout) or `pgm` (a robot map) |
+| `resolution_m` | `DOUBLE PRECISION` | `pgm`: metres per pixel from `map.yaml` |
+| `map_origin_x`, `map_origin_y`, `map_origin_yaw` | `DOUBLE PRECISION` | `pgm`: map frame pose of the lower-left pixel from `map.yaml` |
+
+A robot map's `origin_x_px`, `origin_y_px`, `px_per_m` and `rotation_rad` are computed from its
+`map.yaml` at upload and are not changed afterwards (`UPDATE` only touches `kind = 'floorplan'`).
+
+**`geo_site`**, one row
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `SMALLINT` | Primary key, default 1, `CHECK (id = 1)` |
+| `control_points` | `JSONB` | Not null, default `'[]'`; `[{label, x, y, lat, lon}]` |
+| `heading_deg` | `DOUBLE PRECISION` | Compass heading of the map x axis, used with a single control point |
+| `fit_method` | `TEXT` | `points` or `heading`; null until fitted |
+| `ref_lat`, `ref_lon` | `DOUBLE PRECISION` | Reference of the tangent plane (degrees) |
+| `scale`, `rotation_rad`, `east_m`, `north_m` | `DOUBLE PRECISION` | The fitted similarity from map metres to the tangent plane |
+| `rms_m` | `DOUBLE PRECISION` | RMS residual of the fit, metres |
+| `basemap` | `TEXT` | Not null, default `osm`; `CHECK` `osm`, `satellite`, `custom` or `none` |
+| `basemap_url`, `basemap_attribution` | `TEXT` | Not null, default `''`; used by `custom` |
+| `basemap_max_zoom` | `INT` | Not null, default 19 |
+| `overlay_path`, `overlay_type` | `TEXT` | The overlay image on disk and its content type; null without one |
+| `overlay_north`, `overlay_south`, `overlay_east`, `overlay_west` | `DOUBLE PRECISION` | Bounds of the overlay (degrees) |
+| `overlay_opacity` | `DOUBLE PRECISION` | Not null, default 1 |
+| `overlay_updated_at` | `TIMESTAMPTZ` | When the overlay or its bounds last changed |
+| `updated_by` | `TEXT` | Not null, default `''`; username of the last change |
+| `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+**`telemetry`**, new columns `lat` and `lon` (`DOUBLE PRECISION`): the GPS position of a robot
+that reports a fix, for trails and track replay on a `gps` map.
+
+Migrations run under the advisory lock `7151987`, so servers starting on one database at once
+apply them one after the other.
+
+### 009_substation.sql
+
+[`009_substation.sql`](../internal/store/migrations/009_substation.sql) adds substation inspection
+([substation](substation.md)).
+
+**`assets`**: the equipment of the site
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL` | Primary key |
+| `tag` | `TEXT` | Not null; unique ignoring case (index `assets_tag` on `lower(tag)`) |
+| `name`, `kind` | `TEXT` | Not null; `kind` one of `substation.AssetKinds`, checked by the API |
+| `bay`, `phase`, `notes` | `TEXT` | Not null, default `''` |
+| `voltage_kv` | `DOUBLE PRECISION` | |
+| `x`, `y` | `DOUBLE PRECISION` | Position in the map frame, metres |
+| `archived` | `BOOLEAN` | Not null, default false |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+**`inspection_points`**: where a robot inspects
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL` | Primary key |
+| `name` | `TEXT` | Not null |
+| `kind` | `TEXT` | Not null; `CHECK` `thermal` or `pd` |
+| `asset_id` | `BIGINT` | References `assets(id)` `ON DELETE RESTRICT` |
+| `route_id` | `BIGINT` | References `routes(id)` `ON DELETE SET NULL` |
+| `stop_index` | `INT` | The route stop, `CHECK (stop_index >= 0)` |
+| `seq` | `INT` | Not null, default 0; order at the stop |
+| `ptz` | `JSONB` | `{pan_deg, tilt_deg, zoom}` |
+| `settings` | `JSONB` | Not null, default `'{}'`; `{reference, emissivity, distance_m, watch_db, alarm_db}` |
+| `targets` | `JSONB` | Not null, default `'[]'`; `[{key, label, asset_id, phase, group, roi, limit_c}]`, GIN index (`jsonb_path_ops`) for the assets they name |
+| `enabled` | `BOOLEAN` | Not null, default true |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+**`inspections`**: one capture with its rating
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL` | Primary key |
+| `uid` | `TEXT` | Not null, unique: robot uploads repeat safely |
+| `point_id` | `BIGINT` | Not null, references `inspection_points(id)` `ON DELETE RESTRICT` |
+| `robot_id` | `TEXT` | References `robots(id)` `ON DELETE SET NULL` |
+| `patrol_id` | `BIGINT` | References `patrols(id)` `ON DELETE SET NULL` |
+| `taken_at` | `TIMESTAMPTZ` | Not null; the robot time corrected for its clock offset |
+| `kind`, `reference` | `TEXT` | Not null; the point's kind and the reference that rated it |
+| `ambient_c` | `DOUBLE PRECISION` | |
+| `thermal` | `JSONB` | Every target's reading and rating (`substation.Result`) |
+| `pd` | `JSONB` | `{db, detected, kind, priority}` |
+| `priority` | `SMALLINT` | Not null, default 0; the most severe of the capture |
+| `x`, `y`, `yaw` | `DOUBLE PRECISION` | The robot pose |
+| `images` | `JSONB` | Not null, default `'{}'`; `{thermal, visual, acoustic}` file paths |
+| `created_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+Indexes on `(point_id, taken_at DESC)`, `patrol_id` and `taken_at DESC`.
+
+**`findings`**: a deficiency of one target until it is resolved
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL` | Primary key |
+| `point_id` | `BIGINT` | Not null, references `inspection_points(id)` `ON DELETE RESTRICT` |
+| `target_key` | `TEXT` | Not null; the thermal target, or `pd` |
+| `label`, `basis`, `note` | `TEXT` | Not null, default `''` |
+| `asset_id` | `BIGINT` | References `assets(id)` `ON DELETE SET NULL` |
+| `kind` | `TEXT` | Not null |
+| `status` | `TEXT` | Not null, default `open`; `CHECK` `open`, `acknowledged` or `resolved` |
+| `priority` | `SMALLINT` | Not null; the most severe seen while not resolved |
+| `last_priority` | `SMALLINT` | Not null; of the latest reading, 0 when normal |
+| `first_inspection_id`, `last_inspection_id` | `BIGINT` | Not null, reference `inspections(id)` `ON DELETE RESTRICT` |
+| `first_seen`, `last_seen` | `TIMESTAMPTZ` | Not null |
+| `last_value`, `last_delta_c` | `DOUBLE PRECISION` | °C (hottest) or dB, and the rise that rated it |
+| `occurrences` | `INT` | Not null, default 1; abnormal readings |
+| `acknowledged_by`, `resolved_by` | `TEXT` | Usernames |
+| `acknowledged_at`, `resolved_at`, `notified_at` | `TIMESTAMPTZ` | |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | Not null, default `now()` |
+
+The unique index `findings_active` on `(point_id, target_key) WHERE status <> 'resolved'` keeps one
+finding per target until it is resolved; recording an inspection and its findings is one
+transaction. Indexes on `asset_id` (not resolved) and `(status, priority, last_seen DESC)`.
+
+The site settings are the JSON value of the `settings` key `substation`.
+
 ## Retention
 
 - With TimescaleDB, `telemetry` rows older than 180 days are dropped and chunks older than 7 days
@@ -435,13 +638,17 @@ clients, their tokens, and the change feed column on `anomalies`.
   samples, `audit_log` and `sessions` (expired sessions included) grow until removed through the API
   or by hand. Deleting a robot cascades to its routes, schedules, patrols, anomalies, crowd samples
   and events, but not to `telemetry` rows or photo files.
+- Substation inspections, findings and their images are kept: a point with inspections and an asset
+  in use cannot be deleted, and deleting a robot only clears `inspections.robot_id`.
 
 ## Files outside the database
 
 | Path | Referenced by | Written by |
 |---|---|---|
 | `NETRA_DATA_DIR/anomalies/<YYYY-MM-DD>/<uid>.jpg` | `anomalies.image_path` | Robot anomaly upload; the date is the upload day in the process time zone |
-| `NETRA_DATA_DIR/floorplans/<unix nanoseconds><ext>` | `floor_plans.file_path` | Floor-plan upload; deleted with the plan |
+| `NETRA_DATA_DIR/floorplans/<unix nanoseconds><ext>` | `floor_plans.file_path` | Floor-plan upload, or the PNG rendered from a robot map (`.png`); deleted with the plan |
+| `NETRA_DATA_DIR/geo/overlay-<unix nanoseconds><ext>` | `geo_site.overlay_path` | Overlay upload (`.png`, `.jpg` or `.webp`); deleted when replaced or removed |
+| `NETRA_DATA_DIR/inspections/<YYYY-MM-DD>/<uid>-<name><ext>` | `inspections.images` | Robot inspection upload: `thermal`, `visual`, `acoustic`, `.jpg` or `.png`; kept with the inspection |
 
 The stored paths are built from `NETRA_DATA_DIR` at upload time (relative paths stay relative to
 the working directory). Back up the data directory together with the database, and keep

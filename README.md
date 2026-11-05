@@ -32,6 +32,11 @@ in its [robot API](https://github.com/DarmawanRobotics/Pashupati/blob/main/src/r
 
 ## Features
 
+One image for every client: a signed license decides the edition (mall, substation), the tier
+(basic, pro, enterprise), the modules, the robot limit and the branding
+([licensing](docs/licensing.md)). The core runs without one. EZRA issues licenses with the
+[license manager](docs/license-manager.md), a vendor-only web tool.
+
 **Robots**
 - A token per robot, live state over WebSocket, telemetry history (5 s samples) for track replay
   and battery, load and people charts.
@@ -47,6 +52,14 @@ in its [robot API](https://github.com/DarmawanRobotics/Pashupati/blob/main/src/r
 **Anomalies**
 - Robot early detection, then a queue, then `netra-ai` final detection, then a per-category rule:
   confirm at once and send to a Telegram group, or wait for operator validation.
+
+**Substation inspection** (module `substation`, [substation](docs/substation.md))
+- Assets and inspection points on a robot's route: camera pose, thermal regions per component, or
+  partial discharge with an acoustic camera.
+- Every thermal reading rated after ANSI/NETA MTS Table 100.18 (over a similar component or the
+  ambient air, and the rated temperature); partial discharge against site levels.
+- Findings from the first abnormal reading to the repair, with Telegram alerts, trends per
+  component, the inspection part of the patrol report and Excel exports.
 
 **Crowd and reports**
 - Per-minute people cells become heatmaps and hourly and daily peaks.
@@ -75,7 +88,7 @@ in its [robot API](https://github.com/DarmawanRobotics/Pashupati/blob/main/src/r
 
 | Service | Source | Stack | |
 |---|---|---|---|
-| `netra-api` | `cmd/`, `internal/` | Go 1.22, PostgreSQL / TimescaleDB, NATS | REST and WebSocket API, robot gateway, scheduler, anomaly pipeline, reports, integration API |
+| `netra-api` | `cmd/`, `internal/` | Go 1.22, PostgreSQL / TimescaleDB, NATS | REST and WebSocket API, robot gateway, scheduler, anomaly pipeline, reports, integration API; one process, or `api`, `gateway` and `worker` processes over NATS (`NETRA_ROLES`, [architecture](docs/architecture.md#process-roles-and-split-installations)) |
 | `netra-ai` | `ai/` | Python 3.12, FastAPI, Ollama | Final anomaly detection with a larger vision-language model |
 
 ## API
@@ -99,7 +112,8 @@ Dashboard side, with a Bearer session token (the full reference is [docs/api.md]
 | GET / POST | `/api/v1/anomalies[/{id}][/image]`, `/api/v1/anomalies/{id}/validate` | view / operate |
 | GET / PUT, DELETE | `/api/v1/rules[/{category}]` | view / configure |
 | GET | `/api/v1/crowd/heatmap`, `/api/v1/crowd/timeline` | view |
-| GET / POST, PUT, DELETE | `/api/v1/floorplans[/{id}][/file]` | view / configure |
+| GET / POST, PUT, DELETE | `/api/v1/floorplans[/{id}][/file]`, `POST /api/v1/floorplans/pgm` (robot map: `map.yaml` + `map.pgm`) | view / configure |
+| GET / PUT, POST, DELETE | `/api/v1/geo` (site georeference of a `gps` deployment), `POST /api/v1/geo/fit`, `/api/v1/geo/overlay[/file]` | view / configure |
 | GET | `/api/v1/reports/patrols/{id}/pdf`, `/api/v1/reports/summary?format=pdf\|xlsx`, `/api/v1/reports/anomalies`, `/api/v1/reports/patrols` | view |
 | GET, POST, PUT, DELETE | `/api/v1/users[/{id}]`, `/api/v1/users/{id}/password` | users |
 | GET | `/api/v1/audit` | audit |
@@ -116,6 +130,8 @@ instead ([INTEGRATION.md](INTEGRATION.md)).
 | [Architecture](docs/architecture.md) | Components, package map, request and robot lifecycles, anomaly pipeline, patrols and scheduler, crowd, reports, metrics |
 | [Dashboard API](docs/api.md) | Every `/api/v1` route with its permission, authentication, errors, the live WebSocket, robot endpoints |
 | [Database](docs/database.md) | How migrations are applied, each migration in order, the tables |
+| [Licensing](docs/licensing.md) | Editions, tiers and modules, the signed license, issuing and installing one |
+| [License manager](docs/license-manager.md) | EZRA's web tool to issue, renew and check licenses for clients and their deployments (vendor only) |
 | [Configuration](docs/configuration.md) | Environment variables of `netra-api`, `netra-ai` and the smoke test |
 | [Development](docs/development.md) | Local setup, tests, lint, smoke test, CI, hooks, adding endpoints and migrations, releases |
 | [AI service](docs/ai-service.md) | `netra-ai`: endpoints, prompt and answer handling, metrics, tests, image |
@@ -126,6 +142,7 @@ instead ([INTEGRATION.md](INTEGRATION.md)).
 ```bash
 cp .env.example .env && set -a && . ./.env && set +a
 make run                 # API on :8080 (PostgreSQL required; migrations run at start)
+make netra               # the single application with the dashboard inside (bin/netra)
 cd ai && pip install -e ".[dev]" && uvicorn netra_ai.main:app --port 8090
 make test ai-test lint   # unit tests, ruff, golangci-lint
 make smoke               # end-to-end against a running API

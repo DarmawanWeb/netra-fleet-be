@@ -1,64 +1,32 @@
-// Command netra-api runs the NETRA patrol command-center backend.
+// Command netra-api runs the NETRA patrol command center (the Docker image's entry point); the
+// installers ship the same service as `netra serve`. -roles (or NETRA_ROLES) runs only some of
+// its roles, for a split installation.
 package main
 
 import (
 	"context"
-	"errors"
+	"flag"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 	_ "time/tzdata" // time zones without OS tzdata in the container
 
-	"github.com/DarmawanWeb/netra-fleet-be/internal/api"
-	"github.com/DarmawanWeb/netra-fleet-be/internal/auth"
-	"github.com/DarmawanWeb/netra-fleet-be/internal/bus"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/app"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/config"
-	"github.com/DarmawanWeb/netra-fleet-be/internal/detect"
-	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
-	"github.com/DarmawanWeb/netra-fleet-be/internal/notify"
-	"github.com/DarmawanWeb/netra-fleet-be/internal/scheduler"
-	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
 
 func main() {
-	cfg := config.Load()
+	roles := flag.String("roles", "", "roles to run: all, or a comma list of api, gateway and worker (default NETRA_ROLES, else all)")
+	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	st, err := store.Open(ctx, cfg.DatabaseURL)
-	if err != nil {
-		slog.Error("database", "err", err)
-		os.Exit(1)
+	cfg := config.Load()
+	if *roles != "" {
+		cfg.Roles = *roles
 	}
-	defer st.Close()
-	if cfg.AdminPassword != "" {
-		if err := st.EnsureUser(ctx, cfg.AdminUser, auth.HashPassword(cfg.AdminPassword), "admin"); err != nil {
-			slog.Error("admin user", "err", err)
-			os.Exit(1)
-		}
-	}
-
-	var det detect.Detector = detect.PassThrough{}
-	if cfg.FinalDetectorURL != "" {
-		det = detect.NewHTTP(cfg.FinalDetectorURL)
-	}
-	srv := api.New(cfg, st, hub.New(), notify.NewTelegram(cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPI), det, bus.New(cfg.NatsURL))
-	go srv.RunPipeline(ctx)
-	go scheduler.Run(ctx, st, cfg.TimeZone, srv.StartPatrol)
-
-	httpServer := &http.Server{Addr: cfg.Addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = httpServer.Shutdown(shutdown)
-	}()
-	slog.Info("netra-api listening", "addr", cfg.Addr, "tz", cfg.TimeZone.String())
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("http", "err", err)
+	if err := app.Serve(ctx, cfg); err != nil {
+		slog.Error("netra-api", "err", err)
 		os.Exit(1)
 	}
 }

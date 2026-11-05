@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/relay"
 )
 
 func TestRobotCommandNames(t *testing.T) {
-	s := &Server{hub: hub.New(), pending: map[string]pendingCommand{}}
+	s := withRelay(&Server{hub: hub.New(), pending: map[string]pendingCommand{}})
 	cases := []struct {
 		name string
 		want int
@@ -30,4 +31,10 @@ func TestRobotCommandNames(t *testing.T) {
 			t.Errorf("%s: status %d, want %d (%s)", c.name, rec.Code, c.want, rec.Body.String())
 		}
 	}
+}
+
+// withRelay gives a server built in a test the in-process relay New gives it.
+func withRelay(s *Server) *Server {
+	s.relay = relay.NewLocal(s.Handlers())
+	return s
 }

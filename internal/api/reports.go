@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DarmawanWeb/netra-fleet-be/internal/i18n"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/report"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
@@ -120,6 +121,11 @@ func (s *Server) patrolReportPDF(w http.ResponseWriter, r *http.Request) {
 			{Title: t("timeline"), Table: &report.Table{Header: []string{t("time"), t("event"), t("detail")},
 				Widths: []float64{22, 28, 130}, Rows: timeline}},
 		},
+	}
+	if s.lic.Has(license.Substation) {
+		if sec := s.inspectionSection(r.Context(), lang, p.ID); sec != nil {
+			doc.Sections = append(doc.Sections[:1], append([]report.Section{*sec}, doc.Sections[1:]...)...)
+		}
 	}
 	var buf bytes.Buffer
 	if err := report.WritePDF(&buf, doc); err != nil {

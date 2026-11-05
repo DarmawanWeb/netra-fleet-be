@@ -5,6 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -32,16 +33,46 @@ jobs:
         with:
           version: v1.61
       - run: go test -race ./...
+      - name: the single application builds for every installer
+        run: |
+          mkdir -p internal/web/dist && echo '<!doctype html>' > internal/web/dist/index.html
+          go vet -tags webui ./...
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build -tags webui -o /dev/null ./cmd/netra
+          done
       - name: end-to-end smoke test
         env:
           NETRA_ADMIN_PASSWORD: admin
           NETRA_DATABASE_URL: postgres://netra:netra@localhost:5432/netra?sslmode=disable
           NETRA_DATA_DIR: /tmp/netra-data
         run: |
-          go build -o netra-api ./cmd/netra-api
-          ./netra-api & sleep 3
+          # A throwaway signing key trusted by this build only, and a license of every module.
+          go build -o netra-license ./cmd/netra-license
+          ./netra-license keygen -out /tmp/ci-key
+          go build -o netra-api-ci \
+            -ldflags "-X github.com/DarmawanWeb/netra-fleet-be/internal/license.BuildKey=$(cat /tmp/ci-key.pub)" \
+            ./cmd/netra-api
+          ./netra-license issue -key /tmp/ci-key.key -client CI -edition mall -tier enterprise -add substation \
+            -robots 5 -days 1 -name "NETRA CI" -out /tmp/ci.lic
+          NETRA_LICENSE_FILE=/tmp/ci.lic ./netra-api-ci &
+          licensed=$!
+          sleep 3
           pip install requests websocket-client
           NETRA_PASSWORD=admin python3 scripts/smoke_test.py
+          # Substation inspection: assets, points, robot inspections, NETA priorities, findings.
+          NETRA_PASSWORD=admin python3 scripts/smoke_substation.py
+          kill $licensed
+          # The release build without a license: core only, one robot.
+          go build -o netra-api ./cmd/netra-api
+          NETRA_ADDR=:8081 ./netra-api & sleep 3
+          NETRA_URL=http://localhost:8081 NETRA_PASSWORD=admin python3 scripts/smoke_unlicensed.py
+          # First-run setup on an empty database: installation ID, first admin, bound license.
+          PGPASSWORD=netra psql -h localhost -U netra -d netra -c 'CREATE DATABASE netra_setup'
+          NETRA_ADMIN_PASSWORD= NETRA_ADDR=:8082 \
+            NETRA_DATABASE_URL=postgres://netra:netra@localhost:5432/netra_setup?sslmode=disable ./netra-api-ci &
+          sleep 3
+          NETRA_URL=http://localhost:8082 NETRA_LICENSE_TOOL=./netra-license NETRA_LICENSE_KEY=/tmp/ci-key.key \
+            python3 scripts/smoke_setup.py
 
   ai:
     runs-on: ubuntu-latest

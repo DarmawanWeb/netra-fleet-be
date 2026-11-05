@@ -13,6 +13,7 @@ import requests
 import websocket
 
 API = os.environ.get('NETRA_URL', 'http://localhost:8080')
+ROBOT_API = os.environ.get('NETRA_ROBOT_URL', API)  # the gateway of a split installation
 USER, PASSWORD = os.environ.get('NETRA_USER', 'admin'), os.environ.get('NETRA_PASSWORD', 'admin')
 
 
@@ -31,7 +32,7 @@ robot_token = s.post(f'{API}/api/v1/robots', json={'id': robot_id, 'name': 'Smok
 rh = {'Authorization': f'Bearer {robot_token}', 'X-Robot-Id': robot_id}
 
 inbox = []
-ws = websocket.create_connection(API.replace('http', 'ws') + '/api/v1/robot/ws',
+ws = websocket.create_connection(ROBOT_API.replace('http', 'ws') + '/api/v1/robot/ws',
                                  header=[f'{k}: {v}' for k, v in rh.items()])
 threading.Thread(target=lambda: [inbox.append(json.loads(ws.recv())) for _ in iter(int, 1)],
                  daemon=True).start()
@@ -42,7 +43,7 @@ csv = '# x,y,yaw_deg,dwell_sec\n0,0,0,0\n5,0,90,10\n5,5,180,0\n0,0,0,0\n'
 meta = {'uid': str(uuid.uuid4()), 'name': 'Koridor Lt1', 'recorded_at': time.time(), 'length_m': 17.1,
         'stops': 1, 'closed': True}
 for _ in range(2):  # second upload must be idempotent
-    r = requests.post(f'{API}/api/v1/robot/routes', headers=rh, data={'meta': json.dumps(meta)},
+    r = requests.post(f'{ROBOT_API}/api/v1/robot/routes', headers=rh, data={'meta': json.dumps(meta)},
                       files={'route.csv': ('route.csv', csv, 'text/csv')})
 route_id = r.json()['id']
 routes = s.get(f'{API}/api/v1/routes', params={'robot_id': robot_id}).json()
@@ -55,7 +56,7 @@ patrol_id = s.post(f'{API}/api/v1/patrols', json={'robot_id': robot_id, 'route_i
 time.sleep(0.5)
 cmd = next(m for m in inbox if m.get('type') == 'command')
 check(cmd['name'] == 'start_patrol' and cmd['args']['patrol_id'] == patrol_id, 'robot got start_patrol')
-file = requests.get(f'{API}/api/v1/robot/routes/{route_id}/file', headers=rh).text
+file = requests.get(f'{ROBOT_API}/api/v1/robot/routes/{route_id}/file', headers=rh).text
 check(file == csv, 'robot downloaded the route')
 ws.send(json.dumps({'type': 'ack', 'id': cmd['id'], 'ok': True, 'msg': 'patrol started'}))
 ctx = {'patrol_id': patrol_id, 'route_id': route_id, 'ts': time.time()}
@@ -72,7 +73,7 @@ ids = {}
 for category in ('trash', 'floor_damage'):
     am = {'uid': str(uuid.uuid4()), 'category': category, 'confidence': 0.9, 'description': 'test',
           'pose': {'x': 5.0, 'y': 0.1, 'yaw': 0.0}, 'stop_index': 1, 'detector': 'robot', **ctx}
-    r = requests.post(f'{API}/api/v1/robot/anomalies', headers=rh, data={'meta': json.dumps(am)},
+    r = requests.post(f'{ROBOT_API}/api/v1/robot/anomalies', headers=rh, data={'meta': json.dumps(am)},
                       files={'image.jpg': ('image.jpg', jpeg, 'image/jpeg')})
     ids[category] = r.json()['id']
 time.sleep(1.5)
@@ -112,7 +113,22 @@ r = s.post(f'{API}/api/v1/robots/{robot_id}/command', json={'name': 'estop'})
 time.sleep(0.3)
 check(r.status_code == 202 and any(m.get('name') == 'estop' for m in inbox if m.get('type') == 'command'),
       'robot got estop')
-check('public_url' in s.get(f'{API}/api/v1/info').json(), 'info endpoint')
+info = s.get(f'{API}/api/v1/info').json()
+check('public_url' in info, 'info endpoint')
+# CI runs with a license of every module (see .github/workflows/ci.yml)
+check(info['license']['status'] == 'valid' and {'anomaly', 'crowd', 'integration'} <= set(info['features']),
+      'license applied: ' + ' '.join(info['features']))
+check(requests.get(f'{API}/api/v1/branding').json()['name'] == info['branding']['name'], 'branding is public')
+check(info['installation_id'].startswith('NETRA-') and info['map_mode'] == 'floorplan' and info['version'],
+      'installation ID, map mode and version')
+check(s.post(f'{API}/api/v1/floorplans/pgm').status_code == 409 and s.get(f'{API}/api/v1/geo').status_code == 409,
+      'robot maps and the site georeference refused on floor plan maps')
+check(requests.get(f'{API}/api/v1/setup').json()['required'] is False, 'setup closed once users exist')
+check(requests.post(f'{API}/api/v1/setup', json={'username': 'intruder', 'password': 'intruder-pass'}).status_code == 409,
+      'setup cannot add an admin later')
+lic = s.get(f'{API}/api/v1/license').json()
+check(lic['robots'] >= 1 and lic['robot_limit'] == info['robot_limit'], 'license page')
+check(s.put(f'{API}/api/v1/license', data='NETRA-LIC-1.forged.sig').status_code == 400, 'forged license refused')
 
 # inspection / people control: the server waits for the robot's ack
 def answer(name, ok, msg):
@@ -150,7 +166,7 @@ ws.send(json.dumps({'type': 'telemetry', 'ts': skewed, 'pose': {'x': 1, 'y': 2, 
 time.sleep(0.3)
 am = {'uid': str(uuid.uuid4()), 'ts': skewed - 5, 'category': 'trash', 'confidence': 0.9, 'description': 'skew',
       'pose': {'x': 5.0, 'y': 0.1, 'yaw': 0.0}}
-skew_id = requests.post(f'{API}/api/v1/robot/anomalies', headers=rh, data={'meta': json.dumps(am)},
+skew_id = requests.post(f'{ROBOT_API}/api/v1/robot/anomalies', headers=rh, data={'meta': json.dumps(am)},
                         files={'image.jpg': ('image.jpg', jpeg, 'image/jpeg')}).json()['id']
 detected = s.get(f'{API}/api/v1/anomalies/{skew_id}').json()['detected_at']
 age = time.time() - datetime.fromisoformat(detected.replace('Z', '+00:00')).timestamp()

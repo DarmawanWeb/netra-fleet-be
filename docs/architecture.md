@@ -10,11 +10,11 @@ the [Netra](https://github.com/DarmawanWeb/Netra) repository.
 
 | Component | Source | Role |
 |---|---|---|
-| `netra-api` | this repository: [`cmd/netra-api`](../cmd/netra-api/main.go), `internal/` | Dashboard REST and WebSocket API, robot gateway, anomaly pipeline, scheduler, reports, integration API, metrics |
+| `netra` / `netra-api` | this repository: [`cmd/netra`](../cmd/netra/main.go) (installers), [`cmd/netra-api`](../cmd/netra-api/main.go) (Docker), [`internal/app`](../internal/app/app.go) | One service: dashboard REST and WebSocket API, the dashboard itself (when built in), robot gateway, anomaly pipeline with built-in Ollama detection, scheduler, reports, integration API, backups, metrics. The same binary can also run as separate `api`, `gateway` and `worker` processes ([process roles](#process-roles-and-split-installations)) |
 | `netra-ai` | this repository: [`ai/`](../ai/netra_ai/main.py) | Final anomaly detection with a vision-language model on Ollama ([AI service](ai-service.md)) |
 | PostgreSQL / TimescaleDB | deployment | All state; `netra-api` applies its own migrations ([database](database.md)) |
-| `NETRA_DATA_DIR` | `netra-api` volume | Anomaly photos and floor-plan files |
-| NATS | deployment, optional | Receives the domain events `netra-api` publishes; nothing in this repository subscribes |
+| `NETRA_DATA_DIR` | `netra-api` volume | Anomaly photos, floor-plan files, rendered robot maps and the site overlay |
+| NATS | deployment, optional | Receives the domain events `netra-api` publishes; in a split installation also carries the messages between the processes |
 | Ollama | deployment | Runs the vision-language model for `netra-ai` |
 | Robots | [Pashupati](https://github.com/DarmawanRobotics/Pashupati/blob/main/src/robot_fleet/API.md) | Connect with a robot token: WebSocket for telemetry, events and commands, HTTPS for uploads |
 | Dashboard | DarmawanWeb/netra-fleet-fe (Next.js) | Operator UI: REST with a session token, live WebSocket feed |
@@ -31,7 +31,7 @@ flowchart LR
     ai["netra-ai<br/>FastAPI"]
     ollama["Ollama<br/>vision-language model"]
     db[("PostgreSQL / TimescaleDB")]
-    files[("NETRA_DATA_DIR<br/>photos, floor plans")]
+    files[("NETRA_DATA_DIR<br/>photos, floor plans, maps")]
     nats["NATS"]
     tg["Telegram Bot API"]
     prom["Prometheus, Grafana"]
@@ -52,44 +52,253 @@ flowchart LR
 
 ### Process layout
 
-[`cmd/netra-api/main.go`](../cmd/netra-api/main.go) wires the process:
+`app.Serve` ([`internal/app/app.go`](../internal/app/app.go)) wires the process; `netra serve`
+and `netra-api` both call it:
 
-1. `config.Load` reads the environment ([configuration](configuration.md)).
-2. `store.Open` connects to PostgreSQL, retrying once a second for about 30 s, and applies the
-   embedded migrations.
-3. If `NETRA_ADMIN_PASSWORD` is set, the user `NETRA_ADMIN_USER` is created or updated with that
-   password and the `admin` role (on every start).
-4. The final detector is `detect.HTTP` (calls `netra-ai`) when `NETRA_FINAL_DETECTOR_URL` is set,
-   else `detect.PassThrough`, which returns the robot's own result.
-5. `api.New` builds the server with the WebSocket hub, the Telegram notifier and the NATS
-   publisher. Two goroutines start: the anomaly pipeline (`Server.RunPipeline`) and the scheduler
-   (`scheduler.Run`).
-6. The HTTP server listens on `NETRA_ADDR` (`ReadHeaderTimeout` 10 s, no read or write timeout).
-   SIGINT or SIGTERM shuts it down with a 10 s grace period.
+1. `config.Load` reads the environment ([configuration](configuration.md)); `netra` first reads
+   an environment file (`-config`, `NETRA_CONFIG`, `netra.env` next to the program, or the
+   system's).
+2. The process roles: `NETRA_ROLES` (or `-roles`), every role by default. A split process checks
+   its setup and connects to NATS first ([process roles](#process-roles-and-split-installations)).
+3. The database: with `NETRA_PG_BIN`, the installation's private PostgreSQL
+   ([`pgmanaged`](../internal/pgmanaged/pgmanaged.go)) is created on first use in
+   `NETRA_DATA_DIR/pgdata` and started on 127.0.0.1:`NETRA_PG_PORT`, and stopped with the
+   service; otherwise `NETRA_DATABASE_URL`. `store.Open` retries for about 30 s and applies the
+   embedded migrations under an advisory lock.
+4. If `NETRA_ADMIN_PASSWORD` is set, the user `NETRA_ADMIN_USER` is created or updated with that
+   password and the `admin` role (on every start of a process with the `api` role). Without it a
+   new installation opens the first-run setup.
+5. The license: the installation ID is made at the first start, then the newest valid license of
+   the file, `NETRA_LICENSE` and the upload applies ([licensing](licensing.md)).
+6. The final detector: `detect.HTTP` (an external service such as `netra-ai`) when
+   `NETRA_FINAL_DETECTOR_URL` is set, else the built-in `detect.Ollama` when `NETRA_OLLAMA_URL` is
+   set, else `detect.PassThrough`, which returns the robot's own result. Either model needs the
+   module `ai.final`.
+7. `api.New` builds the server with the WebSocket hub, the Telegram notifier, the NATS publisher
+   and the relay: in-process with every role, over NATS otherwise. With the `worker` role,
+   goroutines start: the anomaly pipeline, the scheduler and, when `pg_dump` is found and
+   `NETRA_BACKUP_KEEP_DAYS` > 0, the daily backup.
+8. The dashboard (`api` role): the export built into the binary (`-tags webui`) or
+   `NETRA_WEB_DIR` is served for every path no API route takes ([`web`](../internal/web/web.go)).
+9. The HTTP server listens on `NETRA_ADDR` (`ReadHeaderTimeout` 10 s) with the routes of the
+   process's roles, with HTTPS when a certificate is configured or `NETRA_TLS=self-signed`
+   ([`tlsutil`](../internal/tlsutil/tlsutil.go)). SIGINT or SIGTERM shuts it down with a 10 s grace
+   period; a split gateway then tells the others its robots are gone; the private PostgreSQL
+   stops last.
+
+### Serving the dashboard
+
+The dashboard is a static export (netra-fleet-fe `out/`). The web handler answers the path, then
+`<path>.html`, then `<path>/index.html`, then the one exported page of a detail route
+(`/anomalies/12` and its payload `/anomalies/12.txt` from `anomalies/0.html` and `0.txt`, the same
+for patrols and robots), else `404.html` with 404. `/` redirects to `/dashboard`; unknown `/api/`
+paths get a JSON 404. Hashed assets under `/_next/static/` are cached for a year, pages revalidate
+by ETag. Every page carries a Content-Security-Policy (same-origin scripts, styles and
+connections, the WebSocket to the same host, images also from data URLs and map tiles),
+`X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: same-origin`.
 
 Live state is held in process memory: WebSocket connections, commands waiting for an ack, robot
 clock offsets, the telemetry sampling clock, the login throttle and the integration rate limits.
-Nothing shares it between processes; a command, for example, only reaches a robot connected to the
-same `netra-api` process.
+What the other roles need of it goes through the relay (next section); the login throttle and the
+integration rate limits stay per process.
+
+## Process roles and split installations
+
+One binary runs three roles ([`internal/role`](../internal/role/role.go)). `NETRA_ROLES` (or
+`netra serve -roles`, `netra-api -roles`) is `all`, the default, or a comma list of the roles of
+one process:
+
+| Role | Serves | Runs in the background |
+|---|---|---|
+| `api` | Dashboard REST (`/api/v1/...`) and WebSocket (`/api/v1/ws`), login and first-run setup, the dashboard files, the integration API (`/api/ext/`) | Nothing; creates the bootstrap admin at start |
+| `gateway` | Robot WebSocket and uploads (`/api/v1/robot/...`); holds the robot connections, measures robot clocks, keeps the commands waiting for an ack | The presence of its robots |
+| `worker` | Only health and metrics | Anomaly pipeline, scheduler, daily backups, Telegram alerts |
+
+Every process serves `/healthz`, `/readyz` and `/metrics`, opens the same PostgreSQL (the
+migrations stay serialised by their advisory lock) and loads the license. All of them need the
+same `NETRA_DATA_DIR`: the gateway writes anomaly photos and inspection images, the api serves
+them and writes floor plans and the site overlay, the worker reads photos for the final detection
+and Telegram and writes the backups, which the api's system page lists and can also make.
+
+`all` is the on-premises install: one process, no NATS needed. Any other value is a split
+installation, for a central server: the processes talk over NATS (`NETRA_NATS_URL`).
+
+```mermaid
+flowchart LR
+    robot["Robots"]
+    dash["Dashboards, integrations"]
+    proxy["Reverse proxy"]
+    api1["netra api"]
+    api2["netra api"]
+    gw["netra gateway"]
+    worker["netra worker"]
+    nats["NATS"]
+    db[("PostgreSQL")]
+    files[("NETRA_DATA_DIR<br/>shared")]
+
+    robot -->|"/api/v1/robot/"| proxy
+    dash -->|"everything else"| proxy
+    proxy --> gw
+    proxy --> api1
+    proxy --> api2
+    gw <--> nats
+    api1 <--> nats
+    api2 <--> nats
+    worker <--> nats
+    gw --> db
+    api1 --> db
+    api2 --> db
+    worker --> db
+    gw --> files
+    api1 --> files
+    worker --> files
+```
+
+### The relay
+
+Handlers reach the other roles through `relay.Relay` ([`internal/relay`](../internal/relay/relay.go)),
+never directly: `Broadcast` (a live message for the dashboards), `Command` (to the robot's
+gateway, waiting for the ack or not), `Online`, `OnlineCount` and `ClockSkew` (presence),
+`RobotsChanged`, `Wake` (the pipeline), `Alert` (Telegram work), `LicenseChanged` and `Ready`. Each
+process hands the relay the ends of the roles it runs (`relay.Handlers`): the dashboards of its hub
+(api), its robot connections as a `relay.Gateway` (gateway), the pipeline wake-up and the alert
+sender (worker), and the license reload.
+
+- `relay.Local` ([`local.go`](../internal/relay/local.go)), with every role: each call goes
+  straight to the handler of the same process, which is how NETRA worked before roles existed.
+  `NETRA_NATS_URL` then only carries the domain events.
+- `relay.NATS` ([`nats.go`](../internal/relay/nats.go)), for a split process: each call is a NATS
+  message, sent with the client of [`internal/bus`](../internal/bus/client.go).
+
+| Subject | From, to | Payload |
+|---|---|---|
+| `_NETRA.live` | any role, every api process | The live message as dashboards receive it |
+| `_NETRA.command.<robot_id>` | api or worker, the gateway holding the robot (request and reply) | `{"id", "name", "args", "patrol_id", "wait", "timeout_ms"}`; reply `{"status": "sent" \| "ack" \| "offline", "ok", "msg", "error"}` |
+| `_NETRA.presence` | gateway, every api and gateway | `{"gateway": "<host>-<pid>", "robots": [{"id", "skew_s"}]}`: all robots of that gateway |
+| `_NETRA.presence.query` | api or gateway on connecting, every gateway | `{}`: publish your robots now |
+| `_NETRA.wake` | gateway, every worker | Empty: an anomaly was queued |
+| `_NETRA.alert` | api or gateway, one worker (queue group `worker`) | `{"kind": "anomaly", "id"}` or `{"kind": "finding", "id", "inspection_id", "chat"}` |
+| `_NETRA.license` | api, every other process | `{"node"}`: the license in the database changed |
+
+The subjects start with `_NETRA` so they stay apart from the domain events under `netra.`.
+
+**Presence.** A gateway publishes the full list of its robots, each with its clock offset, when a
+robot connects or disconnects, when an offset moves by more than a second, when asked, after each
+reconnection to NATS and every 10 s. Api processes keep each gateway's list for 35 s after its last
+message: `online` in `GET /api/v1/robots`, the online count of the system page and the integration
+API read it, and `clock_skew_s` shows the last offset reported. A gateway that stops publishes an
+empty list, so its robots go offline at once; one that crashes drops out after 35 s. Gateways keep
+the offsets too, so an upload that reaches another gateway than the robot's WebSocket is still
+corrected.
+
+**Commands.** A gateway subscribes to `_NETRA.command.<robot_id>` while the robot is connected to
+it, before it announces the robot. `Command` is a NATS request on that subject; the gateway sends
+the command on the robot's WebSocket and keeps the pending entry, so the ack still marks a patrol
+`failed` or `stopped`. Without `wait` it answers `sent` at once; with `wait` (`set_inspection`,
+`set_people`, `inspect_point`) it answers with the robot's ack, or not at all when the 10 s pass and
+it forgets the command. The HTTP answers stay those of one process: no subscriber (NATS answers "no
+responders" at once; NATS 2.2 or later) or `offline` give 409 `robot offline`, no reply within 10 s
+gives 504, an ack 200 or 422. A command that does not wait gives up after 5 s without an answer
+(409); while NATS is down commands fail with 409 `nats: not connected`.
+
+**Pipeline and alerts.** An anomaly upload on a gateway publishes `_NETRA.wake`; the pipeline also
+looks every 10 s, so a lost wake-up only delays it. Telegram alerts are sent by a worker: an anomaly
+confirmed by the pipeline (in the worker itself), one confirmed by an operator (api) and a
+substation finding at the alert priority (gateway) go through `_NETRA.alert` to one worker, so only
+the worker needs `NETRA_TELEGRAM_*`.
+
+**License.** The api process that takes a license (`PUT /api/v1/license` or the first-run setup)
+applies and stores it, then publishes `_NETRA.license`; the other processes load the newest valid
+license of their file, `NETRA_LICENSE` and the upload again.
+
+NATS core delivers at most once: live messages, wake-ups and alerts published while NATS is down
+are dropped (presence is repeated and the pipeline polls; a lost alert is not retried, like a
+failed Telegram call).
+
+### Starting a split process
+
+Refused at start with an error: an unknown role, `all` combined with other roles, a split role
+without `NETRA_NATS_URL`, an invalid `NETRA_NATS_URL` (only `nats://`, no TLS), a NATS server that
+refuses the login, and `NETRA_PG_BIN` (the private database belongs to one process; split roles
+share one PostgreSQL through `NETRA_DATABASE_URL`). An unreachable NATS server is waited for up to
+15 s, then retried in the background; `/readyz` answers 503 `nats unavailable` while the process is
+not connected.
+
+- Run one worker. Two would both make the daily backup, and a worker that starts puts the anomalies
+  left in `analyzing` back in the queue, also those another worker is analyzing. Schedules (marked
+  once a day) and the anomaly claim (`SKIP LOCKED`) would be safe.
+- Run as many api processes and gateways as needed. A robot may connect to any gateway and upload
+  to any gateway.
+- Give each installation its own NATS server or account: the subjects carry no installation ID.
+- Scrape `/metrics` of every process; each counts its own work.
+
+### Deployment example
+
+A central server with two api processes, one gateway and one worker behind Caddy; every process
+has the same configuration apart from its role and address:
+
+```bash
+# common to all processes
+NETRA_DATABASE_URL=postgres://netra:secret@db:5432/netra?sslmode=disable
+NETRA_NATS_URL=nats://nats:4222
+NETRA_DATA_DIR=/data                       # one shared volume
+NETRA_LICENSE_FILE=/etc/netra/netra.lic
+NETRA_PUBLIC_URL=https://netra.example.com
+
+NETRA_ROLES=api      NETRA_ADDR=:8080 netra serve   # hosts api-1 and api-2
+NETRA_ROLES=gateway  NETRA_ADDR=:8080 netra serve   # host gateway
+NETRA_ROLES=worker   NETRA_ADDR=:8080 netra serve   # host worker, with NETRA_TELEGRAM_TOKEN
+```
+
+```caddyfile
+netra.example.com {
+	handle /api/v1/robot/* {
+		reverse_proxy gateway:8080
+	}
+	handle {
+		reverse_proxy api-1:8080 api-2:8080
+	}
+}
+```
+
+`/api/v1/robot/` (the robot WebSocket included) goes to the gateway, everything else (the
+dashboard, `/api/v1/ws`, `/api/ext/`) to the api processes. Robots keep connecting to
+`NETRA_PUBLIC_URL`. The worker needs no route; scrape its `/metrics` directly.
 
 ## Package map
 
 | Package | Responsibility | Key files |
 |---|---|---|
-| `cmd/netra-api` | Entry point: wiring, background goroutines, graceful shutdown | [`main.go`](../cmd/netra-api/main.go) |
-| `internal/api` | Dashboard REST API and live feed, robot gateway (WebSocket, uploads), commands and acks, clock-skew correction, anomaly pipeline, patrol start, report endpoints, users and sessions, audit, integration-client admin | [`server.go`](../internal/api/server.go) (routes, middleware, helpers), [`dashboard.go`](../internal/api/dashboard.go), [`robot.go`](../internal/api/robot.go), [`robotcontrol.go`](../internal/api/robotcontrol.go), [`clock.go`](../internal/api/clock.go), [`pipeline.go`](../internal/api/pipeline.go), [`reports.go`](../internal/api/reports.go), [`users.go`](../internal/api/users.go), [`clients.go`](../internal/api/clients.go) |
+| `cmd/netra-api` | Entry point: wiring, license loading, background goroutines, graceful shutdown | [`main.go`](../cmd/netra-api/main.go) |
+| `cmd/netra-license` | Vendor tool: signing key, issuing and inspecting licenses | [`main.go`](../cmd/netra-license/main.go) |
+| `cmd/netra-license-manager`, `internal/licensemgr` | Vendor web tool, not part of netra-api: clients and deployments, the encrypted signing key, issuing, renewing and verifying licenses, audit log, embedded UI ([license manager](license-manager.md)) | [`main.go`](../cmd/netra-license-manager/main.go), [`store.go`](../internal/licensemgr/store.go), [`key.go`](../internal/licensemgr/key.go), [`issue.go`](../internal/licensemgr/issue.go), [`server.go`](../internal/licensemgr/server.go), `ui/` |
+| `cmd/netra` | The installed application: `serve` and the maintenance commands (`installation-id`, `reset-password`, `backup`, `restore`, `license`, `version`) | [`main.go`](../cmd/netra/main.go) |
+| `internal/app` | The service: database, license, API, dashboard, pipeline, scheduler, backups, TLS, for every role or the roles of `NETRA_ROLES` with the NATS relay | [`app.go`](../internal/app/app.go) |
+| `internal/role` | The process roles `api`, `gateway`, `worker` and `NETRA_ROLES` parsing | [`role.go`](../internal/role/role.go) |
+| `internal/relay` | What crosses the roles: live messages, robot commands and acks, presence, pipeline wake-up, alerts, license changes; in-process (`Local`) or over NATS | [`relay.go`](../internal/relay/relay.go), [`local.go`](../internal/relay/local.go), [`nats.go`](../internal/relay/nats.go) |
+| `internal/web` | Serves the dashboard export, built in (`webui` tag) or from a directory | [`web.go`](../internal/web/web.go) |
+| `internal/pgmanaged` | The installation's private PostgreSQL: initdb, start, stop | [`pgmanaged.go`](../internal/pgmanaged/pgmanaged.go) |
+| `internal/backup` | Daily `pg_dump` backups with retention, listing, the commands for dump and restore | [`backup.go`](../internal/backup/backup.go) |
+| `internal/tlsutil` | Self-signed certificate for HTTPS on a local network | [`tlsutil.go`](../internal/tlsutil/tlsutil.go) |
+| `internal/sysinfo` | Disk space and data size for the system page | [`sysinfo.go`](../internal/sysinfo/sysinfo.go) |
+| `internal/version` | Build version, set by the release build | [`version.go`](../internal/version/version.go) |
+| `internal/api` | Dashboard REST API and live feed, robot gateway (WebSocket, uploads), commands and acks, clock-skew correction, anomaly pipeline, patrol start, report endpoints, users and sessions, audit, integration-client admin, map modes (robot maps, site georeference), substation inspection (assets, points, robot inspections, findings, exports) | [`server.go`](../internal/api/server.go) (routes, middleware, helpers), [`dashboard.go`](../internal/api/dashboard.go), [`robot.go`](../internal/api/robot.go), [`robotcontrol.go`](../internal/api/robotcontrol.go), [`clock.go`](../internal/api/clock.go), [`pipeline.go`](../internal/api/pipeline.go), [`reports.go`](../internal/api/reports.go), [`users.go`](../internal/api/users.go), [`clients.go`](../internal/api/clients.go), [`maps.go`](../internal/api/maps.go), [`substation.go`](../internal/api/substation.go), [`inspections.go`](../internal/api/inspections.go), [`substation_reports.go`](../internal/api/substation_reports.go) |
 | `internal/auth` | PBKDF2-SHA256 password hashes, random tokens and their SHA-256 digests, roles and permissions | [`auth.go`](../internal/auth/auth.go), [`rbac.go`](../internal/auth/rbac.go) |
-| `internal/bus` | Publish-only NATS client over the core text protocol, reconnects lazily | [`nats.go`](../internal/bus/nats.go) |
+| `internal/bus` | NATS client over the core text protocol (publish, subscribe, queue groups, request and reply, pings, reconnects with backoff), the domain-event publisher, a NATS-like server for tests (`bustest`) | [`client.go`](../internal/bus/client.go), [`nats.go`](../internal/bus/nats.go), [`bustest/server.go`](../internal/bus/bustest/server.go) |
 | `internal/config` | Environment variables into `config.Config` | [`config.go`](../internal/config/config.go) |
 | `internal/detect` | `Detector` interface, `PassThrough`, `HTTP` client for `netra-ai` | [`detect.go`](../internal/detect/detect.go) |
 | `internal/ext` | Integration API `/api/ext/v1`: client credentials, scopes, rate limits, anomaly change feed, fleet data, embedded OpenAPI and Swagger UI | [`ext.go`](../internal/ext/ext.go), [`token.go`](../internal/ext/token.go), [`anomalies.go`](../internal/ext/anomalies.go), [`fleet.go`](../internal/ext/fleet.go), [`limit.go`](../internal/ext/limit.go), [`docs.go`](../internal/ext/docs.go), [`docs/openapi.yaml`](../internal/ext/docs/openapi.yaml) |
-| `internal/hub` | Robot and dashboard WebSocket connections: one writer goroutine each, keep-alive pings, broadcast | [`hub.go`](../internal/hub/hub.go) |
+| `internal/geo` | Georeference: the similarity transform from the robot map frame to WGS84 through the local tangent plane, its least-squares fit from control points or one point and a heading, residuals | [`geo.go`](../internal/geo/geo.go), [`fit.go`](../internal/geo/fit.go) |
+| `internal/hub` | Robot and dashboard WebSocket connections of one process: one writer goroutine each, keep-alive pings, broadcast | [`hub.go`](../internal/hub/hub.go) |
+| `internal/license` | Signed licenses: editions, tiers and feature modules, Ed25519 verification against the built-in keys, status with grace period, branding | [`license.go`](../internal/license/license.go), [`state.go`](../internal/license/state.go), [`keys/`](../internal/license/keys/README.md) |
 | `internal/i18n` | English and Indonesian texts for reports and Telegram captions, category labels | [`i18n.go`](../internal/i18n/i18n.go) |
 | `internal/metrics` | Minimal Prometheus registry (counters, gauges) and the HTTP middleware | [`metrics.go`](../internal/metrics/metrics.go) |
-| `internal/notify` | Telegram `sendPhoto` client | [`telegram.go`](../internal/notify/telegram.go) |
+| `internal/notify` | Telegram `sendPhoto` and `sendMessage` client | [`telegram.go`](../internal/notify/telegram.go) |
 | `internal/report` | PDF (go-pdf/fpdf) and XLSX (hand-written OOXML) writers | [`pdf.go`](../internal/report/pdf.go), [`xlsx.go`](../internal/report/xlsx.go) |
+| `internal/rosmap` | ROS map_server maps: the flat keys of `map.yaml`, PGM (P5 8/16-bit, P2) and PNG decoding, rendering with the map_server occupancy, the floor plan calibration from origin and resolution | [`yaml.go`](../internal/rosmap/yaml.go), [`image.go`](../internal/rosmap/image.go), [`render.go`](../internal/rosmap/render.go) |
 | `internal/scheduler` | Starts patrols from weekly and one-off schedules | [`scheduler.go`](../internal/scheduler/scheduler.go) |
-| `internal/store` | PostgreSQL access (`database/sql`, `lib/pq`), embedded migrations, models and queries, route CSV parsing, integration feed queries | [`store.go`](../internal/store/store.go), [`models.go`](../internal/store/models.go), [`queries.go`](../internal/store/queries.go), [`users.go`](../internal/store/users.go), [`clients.go`](../internal/store/clients.go), [`feed.go`](../internal/store/feed.go), [`routecsv.go`](../internal/store/routecsv.go), `migrations/` |
+| `internal/store` | PostgreSQL access (`database/sql`, `lib/pq`), embedded migrations, models and queries, route CSV parsing, integration feed queries | [`store.go`](../internal/store/store.go), [`models.go`](../internal/store/models.go), [`queries.go`](../internal/store/queries.go), [`users.go`](../internal/store/users.go), [`clients.go`](../internal/store/clients.go), [`feed.go`](../internal/store/feed.go), [`routecsv.go`](../internal/store/routecsv.go), [`substation.go`](../internal/store/substation.go), `migrations/` |
+| `internal/substation` | Substation inspection ratings: ANSI/NETA MTS Table 100.18 over a similar component and over ambient, rated temperature, partial discharge levels; inspection point checks; site settings ([substation](substation.md)) | [`substation.go`](../internal/substation/substation.go), [`point.go`](../internal/substation/point.go), [`site.go`](../internal/substation/site.go) |
 
 ## Request lifecycle
 
@@ -98,7 +307,11 @@ http.Server                 ReadHeaderTimeout 10 s
 └─ metrics.Middleware       counts each request per mux pattern and status class
    └─ cors                  CORS headers on every answer, OPTIONS answered with 204
       └─ http.ServeMux      Go 1.22 patterns, e.g. "GET /api/v1/robots/{id}/track"
-         ├─ no auth         GET /healthz, POST /api/v1/auth/login, GET /metrics, integration token and docs
+         ├─ no auth         GET /healthz, POST /api/v1/auth/login, GET /metrics, GET /api/v1/branding[/logo]
+         ├─ feature         module routes: 403 "feature not licensed" unless the license has the module
+         │  └─ requireUser
+         ├─ mapModes        map routes: 409 "this deployment uses <mode> maps" in another map mode
+         │  └─ requireUser
          ├─ requireUser     dashboard routes, one permission each
          ├─ requireRobot    /api/v1/robot/... routes
          └─ ext.require     integration routes, one scope each
@@ -110,6 +323,18 @@ allows the headers `Authorization, Content-Type` and the methods `GET, POST, PUT
 and answers preflight requests before any authentication. Handlers decode JSON bodies of at most
 1 MiB, answer JSON, and report errors as `{"error": "<message>"}`; `fail` maps
 `store.ErrNotFound` to 404 and any other error to 500 with the error text.
+
+### Licensed modules
+
+The routes are grouped in `Server.Handler`: the core with `route(...)`, the modules with
+`module(feature, ...)`, which checks the license before the session, and the integration API
+mounted under `/api/ext/` behind the module `integration`. The license lives in a
+`license.State` loaded at start from the license file, `NETRA_LICENSE` and the upload kept in the
+database (the newest valid one), and replaced by `PUT /api/v1/license` without a restart. Its
+status is computed at each call, so a license passes from `valid` to `grace` to `expired` on its own.
+Beyond the routes, the modules are checked where data enters: robot anomaly uploads and crowd
+windows, the final detector (`ai.final`) and Telegram (`alerts.telegram`) in the pipeline, and the
+robot limit when a robot is registered. The rules are in [licensing](licensing.md).
 
 ### Sessions and passwords
 
@@ -200,7 +425,7 @@ are dropped before these steps.
 | `type` | Fields the server reads | Effect |
 |---|---|---|
 | `hello` | none | Only the common steps |
-| `telemetry` | `ts`, `pose {x, y, yaw}`, `mode`, `nav.state`, `battery.pct`, `people`, `health {cpu_percent, gpu_percent, memory_percent, memory_used_gb, memory_total_gb, cpu_temp_c}`, `patrol_id` | Measures the clock offset from `ts`; stores the whole message in `robots.last_telemetry` and sets `last_seen`; at most once per 5 s per robot writes a `telemetry` history row and sets `netra_robot_battery_percent` |
+| `telemetry` | `ts`, `pose {x, y, yaw}`, `gps {lat, lon, fix}`, `mode`, `nav.state`, `battery.pct`, `people`, `health {cpu_percent, gpu_percent, memory_percent, memory_used_gb, memory_total_gb, cpu_temp_c}`, `patrol_id` | Measures the clock offset from `ts`; stores the whole message in `robots.last_telemetry` and sets `last_seen`; at most once per 5 s per robot writes a `telemetry` history row (with the GPS position when there is a fix) and sets `netra_robot_battery_percent` |
 | `patrol_event` | `event`, `lap`, `reason`, `patrol_id` | With a patrol ID: `started` sets the patrol `running`, `lap` raises `laps`, `finished` sets `finished` with `reason` as message; always stored in `events` |
 | `stop_event`, `alert` | `patrol_id` | Stored in `events` as received |
 | `crowd` | `ts_start`, `ts_end`, `cell_size`, `cells`, `peak_people`, `patrol_id` | Stored in `crowd_samples` with corrected times |
@@ -227,8 +452,9 @@ the request blocks for up to 10 s and answers 200 with `{"ok": true, "msg": "...
 `{"ok": false, "msg": "..."}` when the robot refused, 504 on timeout and 409 when the robot is
 offline.
 The other commands do not wait for the ack ([api.md](api.md) lists the status codes). Sending to an
-offline robot fails with `robot offline`. Pending entries of commands that are never acked stay in
-memory.
+offline robot fails with `robot offline`. Commands go through `relay.Command` to the gateway holding
+the robot, which keeps the pending map ([split installations](#process-roles-and-split-installations));
+pending entries of commands that are never acked stay in its memory.
 
 ### Clock-skew correction
 
@@ -239,6 +465,8 @@ that robot, in memory. Robot timestamps that are stored (anomaly `ts`, crowd `ts
 a missing timestamp means the time of arrival. `GET /api/v1/robots` reports the offset as
 `clock_skew_s` (seconds, positive when the robot is behind, `null` until the robot has sent
 telemetry since the server started). Telemetry history, events and `last_seen` use server time.
+In a split installation the gateway measures the offset and reports it with its robots' presence;
+api processes show the last reported value.
 
 ### Route uploads
 
@@ -265,11 +493,11 @@ runs the final detection and the category rules.
    triggers nothing else.
 4. **Queued.** For a new row: live `anomaly` message (`queued`),
    `netra_anomalies_received_total{category}`, NATS `netra.anomaly.queued`, and the pipeline is
-   woken.
-5. **Claim.** One pipeline goroutine. At start it puts anomalies left in `analyzing` back to
-   `queued`. It then claims the oldest `queued` anomaly (`FOR UPDATE SKIP LOCKED`, status
-   `analyzing`), processes it, and repeats until none is left; then it waits for the next upload
-   or a 10 s tick.
+   woken (`relay.Wake`, across processes in a split installation).
+5. **Claim.** One pipeline goroutine, in the `worker` role. At start it puts anomalies left in
+   `analyzing` back to `queued`. It then claims the oldest `queued` anomaly (`FOR UPDATE SKIP
+   LOCKED`, status `analyzing`), processes it, and repeats until none is left; then it waits for
+   the next upload or a 10 s tick.
 6. **Final detection.** `Detector.Classify(photo, early result)`. With `NETRA_FINAL_DETECTOR_URL`
    it posts the multipart fields `early` (`{"category", "confidence", "description"}`) and `image`
    to `netra-ai` with a 120 s timeout; a status of 300 or above is an error. Without it the early
@@ -287,12 +515,12 @@ runs the final detection and the category rules.
     holds the category label, robot ID, detection time in `NETRA_TZ`, position in metres, the
     description and, when `NETRA_PUBLIC_URL` is set, `<NETRA_PUBLIC_URL>/anomalies/<id>`. Success
     stamps `notified_at` and sends a live `anomaly` message with `notified: true`. A failure is
-    only logged; the next operator confirmation of the anomaly tries again.
+    only logged; the next operator confirmation of the anomaly tries again. The worker sends it.
 11. **Validation.** For `needs_validation`, an operator calls `POST /api/v1/anomalies/{id}/validate`
     with `confirm` or `reject`, optionally correcting the category and adding a note. The status
     becomes `confirmed` or `rejected` with `validated_by` and `validated_at`, dashboards get an
-    `anomaly` message, and a confirmation runs the Telegram step in the background. Operator
-    decisions are not published on NATS.
+    `anomaly` message, and a confirmation hands the Telegram step to the worker (`relay.Alert`, in
+    the background). Operator decisions are not published on NATS.
 12. **Integration feed.** A trigger moves `anomalies.updated_at` on every update, so each change
     reaches the `/api/ext/v1/anomalies` change feed about 2 s later.
 
@@ -371,21 +599,27 @@ rule codes.
 ### Live updates
 
 Every state change above is pushed to the dashboards connected to `GET /api/v1/ws` through
-`hub.Broadcast`. The message types are listed in [api.md](api.md#live-websocket-feed).
+`relay.Broadcast`: to the hub of the same process, or over NATS to the dashboards of every api
+process. The message types are listed in [api.md](api.md#live-websocket-feed).
 
 ## NATS events
 
-[`bus.Publisher`](../internal/bus/nats.go) speaks the NATS core protocol over plain TCP (no TLS),
-with credentials from the user info of `NETRA_NATS_URL`. It connects on the first publish and
-reconnects on a later publish after a write error; after a failed connection attempt it waits 5 s
-before the next one. Messages published while disconnected are dropped. An empty `NETRA_NATS_URL`
-disables it.
+[`bus.Publisher`](../internal/bus/nats.go) publishes through the client of
+[`client.go`](../internal/bus/client.go), which speaks the NATS core protocol over plain TCP (no
+TLS), with a user and password, or a token, from the user info of `NETRA_NATS_URL`. The client
+connects at start and stays connected in the background: it pings the server every 20 s and drops
+a connection after two unanswered pings, reconnects after 250 ms, then doubling waits up to 5 s,
+and subscribes again. Messages published while disconnected are dropped. An empty
+`NETRA_NATS_URL` disables it; with every role in one process an invalid one only disables it (it
+is logged). The same connection carries the [relay](#the-relay) of a split installation.
 
 | Subject | Payload | When |
 |---|---|---|
 | `netra.robot.<robot_id>.<type>` | The robot's WebSocket message as received | Every handled robot message |
 | `netra.anomaly.queued` | `{"id", "robot_id", "category"}` (early category) | New anomaly upload |
 | `netra.anomaly.needs_validation`, `.confirmed`, `.dismissed` | `{"id", "robot_id", "category", "confidence"}` | After final detection |
+| `netra.substation.inspection` | `{"id", "point_id", "robot_id", "priority"}` | New substation inspection |
+| `netra.substation.finding.<event>` | `{"id", "priority", "point_id"}` | A finding `opened`, `seen`, `escalated` or read `normal` |
 
 ## Patrol lifecycle and scheduler
 
@@ -457,6 +691,93 @@ size in metres, `cells` as `[ix, iy, count]` triples and `peak_people`. Each mes
 - `GET /api/v1/crowd/timeline`: the highest `peak_people` per hour or day, truncated in `NETRA_TZ`.
 - The patrol recap and the summary report use the same data (crowd peak per patrol, daily peaks).
 
+## Map modes
+
+The license fixes the map mode ([licensing](licensing.md#map-mode)); `license.State.MapMode()` reads
+it, `floorplan` without a license, and it stays after the license expires. The modes share one
+idea: robot positions, routes, anomalies and crowd cells stay in the robot's map frame (metres),
+and each mode only changes how that frame is drawn.
+
+| Mode | Base layer | Placed by | Routes only in this mode |
+|---|---|---|---|
+| `floorplan` | An uploaded layout (SVG, PNG, JPG, PDF) | A calibration set by hand in the dashboard | `POST /api/v1/floorplans` |
+| `pgm` | The robot's occupancy grid, rendered to PNG | Its `map.yaml` (origin and resolution) | `POST /api/v1/floorplans/pgm` |
+| `gps` | Map tiles and/or an aerial image, in WGS84 | A transform fitted from control points | `/api/v1/geo...` |
+
+`Server.Handler` registers those routes with `mapped(modes, ...)`, which wraps them in
+`mapModes` before `requireUser` (like `module` for licensed modules): another mode answers
+`409 {"error": "this deployment uses <mode> maps", "map_mode": "<mode>"}`. Everything else about
+floor plans (listing, files, assigning a plan to a robot, deleting, calibrating a plan of kind
+`floorplan`) works in every mode, so plans made before a license changed the mode stay usable.
+
+### Robot maps (`pgm`)
+
+`POST /api/v1/floorplans/pgm` ([`maps.go`](../internal/api/maps.go)) takes the two files
+`map_saver` writes and stores a floor plan of kind `pgm`:
+
+1. [`rosmap.ParseYAML`](../internal/rosmap/yaml.go) reads the flat keys of `map.yaml` with a small
+   line parser (no YAML library): `image`, `resolution`, `origin` as `[x, y, yaw]` (flow or block
+   list), `negate`, `occupied_thresh`, `free_thresh`, `mode`. Comments, quotes, a byte order mark
+   and CRLF line ends are accepted; errors name the line.
+2. [`rosmap.Decode`](../internal/rosmap/image.go) reads the image: PGM P5 with 8-bit or
+   big-endian 16-bit samples, plain P2, or PNG (the mean of red, green and blue, and its alpha), at
+   most 10 000 px a side and 64 megapixels.
+3. [`rosmap.Render`](../internal/rosmap/render.go) computes the occupancy of each pixel as nav2
+   map_server does (`occ = 1 − value/maxval`, or `value/maxval` with `negate`): in `trinary` mode
+   occupied above `occupied_thresh`, free below `free_thresh`, unknown between; `scale` mode
+   shades the values between (and makes transparent pixels unknown); `raw` mode takes the value as
+   the occupancy. It writes a paletted PNG: free `#f1f5f9`, occupied `#1e293b`, unknown `#b4bdca`,
+   shades between free and occupied. The dashboard shows it as is in the light theme and inverted
+   with the hue kept in the dark one (free a deep navy, walls pale).
+4. `Meta.Calibration` turns origin and resolution into the floor plan calibration, so the plan
+   formula of [api.md](api.md#floor-plans) puts a map position exactly on its pixel (pixel `i`
+   covers `i` to `i + 1`, the lower-left corner of the image is the yaml origin).
+5. The PNG goes to `NETRA_DATA_DIR/floorplans/<unix ns>.png` and the row keeps `resolution_m` and
+   the origin for display. `PUT /api/v1/floorplans/{id}` refuses a robot map (409).
+
+### Site georeference (`gps`)
+
+[`internal/geo`](../internal/geo/geo.go) places the map frame on the earth with a 2D similarity
+from map metres to east/north metres in the tangent plane at a reference point, followed by the
+exact conversion between that plane and the WGS84 ellipsoid (through earth-centred coordinates):
+
+```text
+east  = s·(cos θ·x − sin θ·y) + east_m
+north = s·(sin θ·x + cos θ·y) + north_m        (tangent plane at ref_lat, ref_lon)
+```
+
+- **Fit.** With two or more control points, the reference is the point of the ellipsoid under
+  the mean of their earth-centred positions (also across the antimeridian), their latitude and
+  longitude become tangent-plane positions, and the four parameters are the closed-form least
+  squares solution with both point sets centred. With one point and a heading, the point is the
+  reference, the scale 1 and the rotation `90° − heading`.
+- **Checks** (400 from the API): fewer than two points without a heading, all points at one map
+  position or one latitude/longitude (spread under 1 cm), a scale outside 0.5 to 2, points more
+  than 20 km from their centre, more than 64 points, values that are not numbers or not on the
+  earth.
+- **Residuals** are the ground distances between each point and where the fit puts its map
+  position, and their RMS. Two points always fit exactly; a third shows how good the fit is.
+- **Storage.** `PUT /api/v1/geo` stores the points, the optional heading, the fitted parameters,
+  the RMS and the basemap in the single row of `geo_site`; `GET` recomputes the residuals from the
+  stored transform. `POST /api/v1/geo/fit` fits without storing, for the dashboard to show the
+  residuals while points are edited. The overlay image goes to
+  `NETRA_DATA_DIR/geo/overlay-<unix ns>.<ext>`; replacing or deleting it removes the old file.
+  Every change broadcasts `{"type": "geo"}` so open dashboards reload the site.
+- **Robots** may send their own `gps` position in telemetry ([api.md](api.md#gps-in-telemetry));
+  the server keeps `lat` and `lon` in the 5 s telemetry history. Converting map positions happens
+  in the dashboard, with the same formulas, so live poses need no server round trip.
+
+## Substation inspection
+
+The module `substation` keeps the site's assets and the inspection points robots take at the stops
+of their routes. At the start of a patrol the robot fetches its route's plan; at each stop it turns
+its camera to each point's pose, captures, and uploads what it measured. The server rates every
+reading ([`internal/substation`](../internal/substation/substation.go): ANSI/NETA MTS Table 100.18
+for thermal targets, site levels for partial discharge) and records the inspection and the findings
+it opens or updates in one transaction; findings at the alert priority are handed to the worker for
+Telegram (`relay.Alert`), so the robot's upload never waits for Telegram. The model, the ratings and
+the robot protocol are in [substation](substation.md).
+
 ## Reports
 
 Reports are generated on request and not stored ([`reports.go`](../internal/api/reports.go),
@@ -470,6 +791,12 @@ built-in category codes are translated, other categories use their rule label. T
 | `GET /api/v1/reports/summary` | `netra-summary.pdf` or, with `format=xlsx`, `netra-summary.xlsx` | Patrol and anomaly counts, anomalies per category (without `rejected` and `dismissed`), daily crowd peak, patrol table |
 | `GET /api/v1/reports/anomalies` | `anomalies.xlsx` | One row per anomaly: early and final detection with confidences, status, position, note, validator |
 | `GET /api/v1/reports/patrols` | `patrols.xlsx` | One row per patrol: robot, start, finish, duration, laps, status, message |
+| `GET /api/v1/reports/substation/findings` | `findings.xlsx` | One row per finding: priority and its action, status, asset, point, target, basis, value, rise, first and last seen, occurrences, who acknowledged and resolved, note |
+| `GET /api/v1/reports/substation/inspections` | `readings.xlsx` | One row per thermal target or pd reading: time, point, target, asset, value, ambient, both rises, priority, basis, pd detection and type, robot, patrol |
+
+With the module `substation`, the patrol report adds an Inspections part after the summary: the
+coverage of the route's plan, every reading with its rise and priority, and up to 12 images of
+rated captures. The PDF fonts have no Δ, so the rise column is titled in words.
 
 PDFs are A4 with a NETRA header band and a footer with the generation time and page numbers; text
 goes through a cp1252 translator for the core Helvetica font. XLSX files are minimal OOXML
@@ -479,7 +806,9 @@ header row, an auto-filter, times as text.
 ## Metrics
 
 `GET /metrics` serves the in-process registry of [`metrics.go`](../internal/metrics/metrics.go) in
-the Prometheus text format, without authentication. Values reset when the process restarts.
+the Prometheus text format, without authentication. Values reset when the process restarts. In a
+split installation each process counts its own work (robot metrics on gateways, anomaly processing
+on the worker, HTTP on all), so every process is scraped.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
@@ -490,6 +819,8 @@ the Prometheus text format, without authentication. Values reset when the proces
 | `netra_robot_battery_percent` | gauge | `robot` | Battery from the 5 s telemetry sample |
 | `netra_anomalies_received_total` | counter | `category` (robot's) | New anomaly uploads |
 | `netra_anomalies_processed_total` | counter | `status` | Anomalies through final detection |
+| `netra_inspections_received_total` | counter | `kind`, `priority` | New substation inspections |
+| `netra_findings_opened_total` | counter | `priority` | Substation findings opened |
 | `netra_ext_requests_total` | counter | `client`, `endpoint` | Integration API requests that passed authentication and the rate limit |
 
 `netra-ai` exposes its own metrics ([AI service](ai-service.md#metrics)).

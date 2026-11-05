@@ -93,10 +93,17 @@ type Rule struct {
 	MinConfidence      float64 `json:"min_confidence"`
 }
 
-// FloorPlan is a vector or raster mall layout calibrated against the robot map frame.
+// Kinds of floor plan.
+const (
+	PlanFloorPlan = "floorplan" // an uploaded layout, calibrated by hand
+	PlanPGM       = "pgm"       // a robot map (map.yaml + map.pgm) rendered to PNG, placed by its map.yaml
+)
+
+// FloorPlan is a vector or raster mall layout, or a robot map, calibrated against the robot map frame.
 type FloorPlan struct {
 	ID          int64     `json:"id"`
 	Name        string    `json:"name"`
+	Kind        string    `json:"kind"`
 	FilePath    string    `json:"-"`
 	ContentType string    `json:"content_type"`
 	WidthPx     float64   `json:"width_px"`
@@ -106,6 +113,10 @@ type FloorPlan struct {
 	PxPerM      float64   `json:"px_per_m"`
 	RotationRad float64   `json:"rotation_rad"`
 	CreatedAt   time.Time `json:"created_at"`
+	// Robot maps only (null otherwise): metres per pixel and the map frame pose [x, y, yaw] of
+	// the lower-left pixel, from map.yaml.
+	Resolution *float64    `json:"resolution"`
+	Origin     *[3]float64 `json:"origin"`
 }
 
 // Event is a logged robot event (stop point, alert, patrol lifecycle).

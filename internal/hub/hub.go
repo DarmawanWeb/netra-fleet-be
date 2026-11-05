@@ -105,6 +105,24 @@ func (h *Hub) Online(id string) bool {
 	return ok
 }
 
+// Robots lists the IDs of the connected robots.
+func (h *Hub) Robots() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ids := make([]string, 0, len(h.robots))
+	for id := range h.robots {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// OnlineCount is the number of connected robots.
+func (h *Hub) OnlineCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.robots)
+}
+
 // SendRobot sends a JSON message to a robot.
 func (h *Hub) SendRobot(id string, msg any) error {
 	h.mu.RLock()
@@ -142,9 +160,14 @@ func (h *Hub) Broadcast(msg any) {
 	if err != nil {
 		return
 	}
+	h.BroadcastRaw(b)
+}
+
+// BroadcastRaw sends an encoded message to every dashboard.
+func (h *Hub) BroadcastRaw(msg []byte) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for c := range h.dashboards {
-		c.Send(b)
+		c.Send(msg)
 	}
 }
