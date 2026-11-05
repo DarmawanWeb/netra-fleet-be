@@ -58,7 +58,7 @@ Errors are JSON with a single human-readable message:
 |---|---|
 | 400 | Invalid body or parameter; the message says what is expected |
 | 401 | `login required` (missing, unknown or expired session, or disabled user); `wrong username or password` at login; `unknown robot token` on robot routes |
-| 403 | `your role cannot do this`; on robot routes an `X-Robot-Id` that does not match the token, or another robot's route |
+| 403 | `your role cannot do this`; `feature not licensed` with `"feature": "<module>"` on a module the license does not include ([licensing](licensing.md)); `robot limit of the license reached` with `robot_limit`; on robot routes an `X-Robot-Id` that does not match the token, or another robot's route |
 | 404 | `not found` |
 | 409 | Robot offline, robot ID or username already taken, patrol cannot start, last enabled admin |
 | 422 | The robot refused `set_inspection` or `set_people`; body `{"ok": false, "msg": "..."}` |
@@ -85,9 +85,18 @@ file missing on disk gets a plain-text 404.
 | Method | Path | Permission | What it does |
 |---|---|---|---|
 | GET | `/healthz` | none | `{"status": "ok"}` while the process serves HTTP (no database check) |
-| GET | `/api/v1/info` | view | → `{public_url, time_zone}`: `NETRA_PUBLIC_URL`, the address robots connect to, and `NETRA_TZ` |
+| GET | `/api/v1/info` | view | → `{public_url, time_zone, edition, tier, features, robot_limit, license, branding}`: `NETRA_PUBLIC_URL` (the address robots connect to), `NETRA_TZ`, the licensed modules in force, the robot limit (0: none) and the license and branding as below |
+| GET | `/api/v1/branding` | none | → `{name, color, color_dark, logo}` from the license (`name` `NETRA` without one); `logo` is the URL of the logo or absent. Public: the login page uses it |
+| GET | `/api/v1/branding/logo` | none | The logo of the license (SVG or PNG), `ETag`, cached 5 minutes; 404 without one |
 | GET | `/metrics` | none | Prometheus text format ([metrics](architecture.md#metrics)) |
 | GET | `/api/v1/ws` | view | Live WebSocket feed, see [below](#live-websocket-feed) |
+
+### License
+
+| Method | Path | Permission | What it does |
+|---|---|---|---|
+| GET | `/api/v1/license` | users | → `{license, catalog, editions, tiers, robots, robot_limit}`: `license` is `{status, id, client, edition, tier, features, max_robots, issued_at, expires_at, grace_ends, source, error}` (`status` `missing`, `invalid`, `valid`, `grace` or `expired`; `features` empty unless `valid` or `grace`; `source` `file`, `env` or `upload`; `error` why the last license given was refused), `catalog` every module `{ID, Description}`, `robots` the number registered |
+| PUT | `/api/v1/license` | users | Body: the license text, or `{"license": "..."}`. Verifies and applies it at once, keeps it for the next start, broadcasts `{"type": "license"}` on the live feed → the new `license`; 400 when the signature or format is wrong, 409 when it was issued before the current license |
 
 ### Robots and control
 
@@ -95,14 +104,14 @@ file missing on disk gets a plain-text 404.
 |---|---|---|---|
 | GET | `/api/v1/robots` | view | → robots ordered by ID with `online` and `clock_skew_s` |
 | GET | `/api/v1/robots/{id}/track` | view | `from`, `to` → telemetry history (one sample per 5 s) thinned evenly to at most 3000 points |
-| POST | `/api/v1/robots` | configure | `{id, name}`: `id` matches `^[a-z0-9][a-z0-9_-]{1,31}$`, `name` defaults to `id` → 201 `{id, token}`, the only time the token is shown; 409 when the insert fails (ID taken) |
+| POST | `/api/v1/robots` | configure | `{id, name}`: `id` matches `^[a-z0-9][a-z0-9_-]{1,31}$`, `name` defaults to `id` → 201 `{id, token}`, the only time the token is shown; 409 when the insert fails (ID taken); 403 `{error, robot_limit}` when the license's robot limit is reached |
 | PUT | `/api/v1/robots/{id}` | configure | `{name, floor_plan_id}`: `name` required, an omitted `floor_plan_id` clears it |
 | DELETE | `/api/v1/robots/{id}` | configure | Deletes the robot; the database cascades to its routes, schedules, patrols, anomalies, crowd samples and events (telemetry history and files stay) |
 | POST | `/api/v1/robots/{id}/token` | configure | → `{id, token}`, a new robot token; the old one is refused from now on |
 | POST | `/api/v1/robots/{id}/command` | operate | `{name, args}`, `name` one of `pause`, `resume`, `localize`, `stop_patrol`, `estop` (latches the robot's software e-stop), `estop_release` → 202 `{command_id}` without waiting for the ack; 400 for other names (`start_patrol` goes through `POST /api/v1/patrols`); 409 robot offline |
-| POST | `/api/v1/robots/{id}/inspection` | operate | `{enabled, model, interval}`, at least one: `model` from `GET /api/v1/inspection/models`, `interval` in seconds up to 3600 (0 continuous, negative at stop points only) → sends `set_inspection` and waits up to 10 s: 200 `{ok: true, msg}`, 422 `{ok: false, msg}`, 504 no ack, 409 offline |
-| POST | `/api/v1/robots/{id}/people` | operate | `{enabled}` (required) → sends `set_people`; answers as for inspection |
-| GET | `/api/v1/inspection/models` | view | → array of the model names in `NETRA_INSPECTION_MODELS` |
+| POST | `/api/v1/robots/{id}/inspection` | operate, `anomaly` | `{enabled, model, interval}`, at least one: `model` from `GET /api/v1/inspection/models`, `interval` in seconds up to 3600 (0 continuous, negative at stop points only) → sends `set_inspection` and waits up to 10 s: 200 `{ok: true, msg}`, 422 `{ok: false, msg}`, 504 no ack, 409 offline |
+| POST | `/api/v1/robots/{id}/people` | operate, `crowd` | `{enabled}` (required) → sends `set_people`; answers as for inspection |
+| GET | `/api/v1/inspection/models` | view, `anomaly` | → array of the model names in `NETRA_INSPECTION_MODELS` |
 
 ```json
 {
@@ -209,6 +218,8 @@ per category without `rejected` ones, and `stop_event` events are counted by the
 
 ### Anomalies
 
+Module `anomaly` ([licensing](licensing.md#feature-modules)), with the rules and on-robot inspection.
+
 | Method | Path | Permission | What it does |
 |---|---|---|---|
 | GET | `/api/v1/anomalies` | view | `status`, `category` (final category, else early), `robot_id`, `patrol_id`, `from`, `to` (on `detected_at`) → anomalies, newest detection first |
@@ -263,6 +274,8 @@ final detection ran; position fields are `null` when the robot sent no pose.
 
 ### Crowd
 
+Module `crowd`, with `POST /api/v1/robots/{id}/people`.
+
 | Method | Path | Permission | What it does |
 |---|---|---|---|
 | GET | `/api/v1/crowd/heatmap` | view | `robot_id`, `from`, `to` → cells `{x, y, size, peak, mean, samples}`, `x`, `y` and `size` in map metres |
@@ -300,6 +313,7 @@ A map position `(x, y)` in metres becomes a plan pixel with
 ### Reports
 
 All report routes take `lang` (`en` by default, or `id`) and, except the patrol PDF, `from` and `to`.
+The patrol PDF is in the core; the summary and the exports need the module `reports.export`.
 The answer is a file download (`Content-Disposition: attachment`).
 
 | Method | Path | Permission | What it does |
@@ -323,11 +337,15 @@ The contents are described in [architecture](architecture.md#reports).
 
 ### Audit
 
+Module `audit`. Actions are recorded with or without it; the module is the page that reads them.
+
 | Method | Path | Permission | What it does |
 |---|---|---|---|
 | GET | `/api/v1/audit` | audit | `username`, `action` (exact match), `from`, `to` → up to 1000 entries, newest first, `{ts, username, action, target, detail, ip}` |
 
 ### Integration API clients
+
+Module `integration`, which also gates the whole [integration API](#integration-api).
 
 | Method | Path | Permission | What it does |
 |---|---|---|---|
@@ -371,6 +389,7 @@ reload state from the REST API after a reconnect.
 | `patrol_requested` | `robot_id`, `patrol_id` | `start_patrol` was sent to the robot |
 | `route` | `robot_id`, `id` | A robot uploaded a route (also when the upload repeats an existing one) |
 | `anomaly` | `id`, `status`, and depending on the event `robot_id`, `category`, `notified` | Upload (`queued`, with `robot_id`), final detection (with `robot_id` and `category`), operator decision, Telegram alert sent (`notified: true`) |
+| `license` | `license` (as in `GET /api/v1/license`) | A license was uploaded in the dashboard |
 
 ```json
 {"type": "robot_online", "robot_id": "l1w-01", "online": true}
@@ -392,8 +411,8 @@ the server side is described in [architecture](architecture.md#robot-connection-
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/api/v1/robot/ws` | WebSocket: telemetry, patrol and stop events, alerts, crowd windows and acks in; commands out |
-| POST | `/api/v1/robot/anomalies` | Multipart `meta` (JSON with `uid`) and `image.jpg` → 201 `{id, created}`; idempotent on `uid` |
+| GET | `/api/v1/robot/ws` | WebSocket: telemetry, patrol and stop events, alerts, crowd windows and acks in; commands out. Crowd windows are dropped without the module `crowd` |
+| POST | `/api/v1/robot/anomalies` | Multipart `meta` (JSON with `uid`) and `image.jpg` → 201 `{id, created}`; idempotent on `uid`. Without the module `anomaly`: 202 `{id: 0, created: false, dropped}`, nothing kept |
 | POST | `/api/v1/robot/routes` | Multipart `meta` (JSON with `uid`) and `route.csv` → 201 `{id}`; idempotent on `uid` |
 | GET | `/api/v1/robot/routes/{id}/file` | → the route CSV; 403 for a route of another robot |
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
@@ -104,6 +105,9 @@ func (s *Server) handleRobotMessage(ctx context.Context, robotID string, data []
 	case "stop_event", "alert":
 		_ = s.store.InsertEvent(ctx, robotID, patrolID, m.Type, data)
 	case "crowd":
+		if !s.lic.Has(license.Crowd) {
+			return // people detection is not licensed: nothing to keep or show
+		}
 		start, end := s.robotTime(robotID, m.TSStart), s.robotTime(robotID, m.TSEnd)
 		if err := s.store.InsertCrowd(ctx, robotID, patrolID, start, end, m.CellSize, m.Cells, m.Peak); err != nil {
 			slog.Error("save crowd", "err", err)
@@ -261,6 +265,11 @@ func (s *Server) robotAnomaly(w http.ResponseWriter, r *http.Request) {
 	meta, img, err := readUpload(r, "image.jpg")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !s.lic.Has(license.Anomaly) {
+		// Accepted and dropped: an error would only make the robot keep it in its spool forever.
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": 0, "created": false, "dropped": "feature not licensed"})
 		return
 	}
 	dir := filepath.Join(s.cfg.DataDir, "anomalies", time.Now().Format("2006-01-02"))

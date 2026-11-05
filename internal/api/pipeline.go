@@ -10,6 +10,7 @@ import (
 
 	"github.com/DarmawanWeb/netra-fleet-be/internal/detect"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/i18n"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
 )
@@ -44,7 +45,11 @@ func (s *Server) RunPipeline(ctx context.Context) {
 
 func (s *Server) process(ctx context.Context, a store.Anomaly) {
 	early := detect.Result{Category: a.EarlyCategory, Confidence: a.EarlyConfidence, Description: a.EarlyNote}
-	final, err := s.detector.Classify(ctx, a.ImagePath, early)
+	var det detect.Detector = detect.PassThrough{}
+	if s.detector != nil && s.lic.Has(license.AIFinal) {
+		det = s.detector
+	}
+	final, err := det.Classify(ctx, a.ImagePath, early)
 	if err != nil {
 		slog.Warn("final detection failed, using the robot result", "anomaly", a.ID, "err", err)
 		final = early
@@ -91,7 +96,7 @@ func (s *Server) notifyConfirmed(id int64) {
 		category = *a.FinalCategory
 	}
 	rule, err := s.store.Rule(ctx, category)
-	if err != nil || !rule.NotifyTelegram || !s.telegram.Enabled() {
+	if err != nil || !rule.NotifyTelegram || !s.telegram.Enabled() || !s.lic.Has(license.Telegram) {
 		return
 	}
 	if err := s.telegram.SendPhoto(ctx, rule.TelegramChatID, s.caption(a, rule), a.ImagePath); err != nil {

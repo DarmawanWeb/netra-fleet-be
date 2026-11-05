@@ -29,6 +29,12 @@ code reads the environment. An empty value counts as unset, so the default appli
 | `NETRA_LANG` | `en` | Language of Telegram captions: `id` for Indonesian, anything else English. Reports take `?lang=` instead | |
 | `NETRA_INSPECTION_MODELS` | `qwen3-vl:2b-instruct,moondream:latest,ahmadwaqar/smolvlm2-2.2b-instruct:latest` | Comma-separated vision models offered for on-robot inspection; `POST /api/v1/robots/{id}/inspection` accepts only these | |
 | `NETRA_EXT_TOKEN_MINUTES` | `60` | Lifetime of integration API access tokens in minutes; a value that is not an integer or lies outside 5 to 1440 gives 60 | |
+| `NETRA_LICENSE_FILE` | empty | Path of the signed license (`NETRA-LIC-1...`) read at start. A missing or unreadable file is logged and the other sources apply ([licensing](licensing.md#installing-a-license)) | yes |
+| `NETRA_LICENSE` | empty | The license text itself, instead of a file | |
+
+Without a valid license from `NETRA_LICENSE_FILE`, `NETRA_LICENSE` or the dashboard upload, the
+server runs the core only with one robot. No variable turns a module on: only a license signed by a
+key built into the binary does ([licensing](licensing.md)).
 
 `NETRA_PUBLIC_URL` serves both the robots (API address) and the Telegram links (dashboard page
 `/anomalies/<id>`), so it assumes the dashboard and the API are reachable under the same origin.
@@ -54,7 +60,9 @@ used as given, and a value that is not a number makes the numeric settings fail 
 
 ## Smoke test
 
-Read by [`scripts/smoke_test.py`](../scripts/smoke_test.py) ([development](development.md#end-to-end-smoke-test)):
+Read by [`scripts/smoke_test.py`](../scripts/smoke_test.py) and
+[`scripts/smoke_unlicensed.py`](../scripts/smoke_unlicensed.py)
+([development](development.md#end-to-end-smoke-test)):
 
 | Variable | Default | Meaning |
 |---|---|---|

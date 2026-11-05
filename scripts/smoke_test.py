@@ -112,7 +112,15 @@ r = s.post(f'{API}/api/v1/robots/{robot_id}/command', json={'name': 'estop'})
 time.sleep(0.3)
 check(r.status_code == 202 and any(m.get('name') == 'estop' for m in inbox if m.get('type') == 'command'),
       'robot got estop')
-check('public_url' in s.get(f'{API}/api/v1/info').json(), 'info endpoint')
+info = s.get(f'{API}/api/v1/info').json()
+check('public_url' in info, 'info endpoint')
+# CI runs with a license of every module (see .github/workflows/ci.yml)
+check(info['license']['status'] == 'valid' and {'anomaly', 'crowd', 'integration'} <= set(info['features']),
+      'license applied: ' + ' '.join(info['features']))
+check(requests.get(f'{API}/api/v1/branding').json()['name'] == info['branding']['name'], 'branding is public')
+lic = s.get(f'{API}/api/v1/license').json()
+check(lic['robots'] >= 1 and lic['robot_limit'] == info['robot_limit'], 'license page')
+check(s.put(f'{API}/api/v1/license', data='NETRA-LIC-1.forged.sig').status_code == 400, 'forged license refused')
 
 # inspection / people control: the server waits for the robot's ack
 def answer(name, ok, msg):

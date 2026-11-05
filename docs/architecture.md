@@ -76,7 +76,8 @@ same `netra-api` process.
 
 | Package | Responsibility | Key files |
 |---|---|---|
-| `cmd/netra-api` | Entry point: wiring, background goroutines, graceful shutdown | [`main.go`](../cmd/netra-api/main.go) |
+| `cmd/netra-api` | Entry point: wiring, license loading, background goroutines, graceful shutdown | [`main.go`](../cmd/netra-api/main.go) |
+| `cmd/netra-license` | Vendor tool: signing key, issuing and inspecting licenses | [`main.go`](../cmd/netra-license/main.go) |
 | `internal/api` | Dashboard REST API and live feed, robot gateway (WebSocket, uploads), commands and acks, clock-skew correction, anomaly pipeline, patrol start, report endpoints, users and sessions, audit, integration-client admin | [`server.go`](../internal/api/server.go) (routes, middleware, helpers), [`dashboard.go`](../internal/api/dashboard.go), [`robot.go`](../internal/api/robot.go), [`robotcontrol.go`](../internal/api/robotcontrol.go), [`clock.go`](../internal/api/clock.go), [`pipeline.go`](../internal/api/pipeline.go), [`reports.go`](../internal/api/reports.go), [`users.go`](../internal/api/users.go), [`clients.go`](../internal/api/clients.go) |
 | `internal/auth` | PBKDF2-SHA256 password hashes, random tokens and their SHA-256 digests, roles and permissions | [`auth.go`](../internal/auth/auth.go), [`rbac.go`](../internal/auth/rbac.go) |
 | `internal/bus` | Publish-only NATS client over the core text protocol, reconnects lazily | [`nats.go`](../internal/bus/nats.go) |
@@ -84,6 +85,7 @@ same `netra-api` process.
 | `internal/detect` | `Detector` interface, `PassThrough`, `HTTP` client for `netra-ai` | [`detect.go`](../internal/detect/detect.go) |
 | `internal/ext` | Integration API `/api/ext/v1`: client credentials, scopes, rate limits, anomaly change feed, fleet data, embedded OpenAPI and Swagger UI | [`ext.go`](../internal/ext/ext.go), [`token.go`](../internal/ext/token.go), [`anomalies.go`](../internal/ext/anomalies.go), [`fleet.go`](../internal/ext/fleet.go), [`limit.go`](../internal/ext/limit.go), [`docs.go`](../internal/ext/docs.go), [`docs/openapi.yaml`](../internal/ext/docs/openapi.yaml) |
 | `internal/hub` | Robot and dashboard WebSocket connections: one writer goroutine each, keep-alive pings, broadcast | [`hub.go`](../internal/hub/hub.go) |
+| `internal/license` | Signed licenses: editions, tiers and feature modules, Ed25519 verification against the built-in keys, status with grace period, branding | [`license.go`](../internal/license/license.go), [`state.go`](../internal/license/state.go), [`keys/`](../internal/license/keys/README.md) |
 | `internal/i18n` | English and Indonesian texts for reports and Telegram captions, category labels | [`i18n.go`](../internal/i18n/i18n.go) |
 | `internal/metrics` | Minimal Prometheus registry (counters, gauges) and the HTTP middleware | [`metrics.go`](../internal/metrics/metrics.go) |
 | `internal/notify` | Telegram `sendPhoto` client | [`telegram.go`](../internal/notify/telegram.go) |
@@ -98,7 +100,9 @@ http.Server                 ReadHeaderTimeout 10 s
 └─ metrics.Middleware       counts each request per mux pattern and status class
    └─ cors                  CORS headers on every answer, OPTIONS answered with 204
       └─ http.ServeMux      Go 1.22 patterns, e.g. "GET /api/v1/robots/{id}/track"
-         ├─ no auth         GET /healthz, POST /api/v1/auth/login, GET /metrics, integration token and docs
+         ├─ no auth         GET /healthz, POST /api/v1/auth/login, GET /metrics, GET /api/v1/branding[/logo]
+         ├─ feature         module routes: 403 "feature not licensed" unless the license has the module
+         │  └─ requireUser
          ├─ requireUser     dashboard routes, one permission each
          ├─ requireRobot    /api/v1/robot/... routes
          └─ ext.require     integration routes, one scope each
@@ -110,6 +114,18 @@ allows the headers `Authorization, Content-Type` and the methods `GET, POST, PUT
 and answers preflight requests before any authentication. Handlers decode JSON bodies of at most
 1 MiB, answer JSON, and report errors as `{"error": "<message>"}`; `fail` maps
 `store.ErrNotFound` to 404 and any other error to 500 with the error text.
+
+### Licensed modules
+
+The routes are grouped in `Server.Handler`: the core with `route(...)`, the modules with
+`module(feature, ...)`, which checks the license before the session, and the integration API
+mounted under `/api/ext/` behind the module `integration`. The license lives in a
+`license.State` loaded at start from the license file, `NETRA_LICENSE` and the upload kept in the
+database (the newest valid one), and replaced by `PUT /api/v1/license` without a restart. Its
+status is computed at each call, so a license passes from `valid` to `grace` to `expired` on its own.
+Beyond the routes, the modules are checked where data enters: robot anomaly uploads and crowd
+windows, the final detector (`ai.final`) and Telegram (`alerts.telegram`) in the pipeline, and the
+robot limit when a robot is registered. The rules are in [licensing](licensing.md).
 
 ### Sessions and passwords
 

@@ -18,6 +18,7 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/detect"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/ext"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/metrics"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/notify"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
@@ -39,6 +40,7 @@ type Server struct {
 	telegram *notify.Telegram
 	detector detect.Detector
 	bus      *bus.Publisher
+	lic      *license.State // nil: no license, core only
 	limiter  *loginLimiter
 	upgrader websocket.Upgrader
 	wake     chan struct{}
@@ -55,10 +57,11 @@ type pendingCommand struct {
 	done     chan ackResult // set when an HTTP request waits for the robot's answer
 }
 
-// New wires a server.
-func New(cfg config.Config, st *store.Store, h *hub.Hub, tg *notify.Telegram, det detect.Detector, b *bus.Publisher) *Server {
+// New wires a server. lic decides the feature modules (nil: core only).
+func New(cfg config.Config, st *store.Store, h *hub.Hub, tg *notify.Telegram, det detect.Detector, b *bus.Publisher,
+	lic *license.State) *Server {
 	return &Server{
-		cfg: cfg, store: st, hub: h, telegram: tg, detector: det, bus: b, limiter: newLoginLimiter(),
+		cfg: cfg, store: st, hub: h, telegram: tg, detector: det, bus: b, lic: lic, limiter: newLoginLimiter(),
 		lastLog:  map[string]time.Time{},
 		skew:     map[string]time.Duration{},
 		upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
@@ -73,8 +76,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 
+	mux.HandleFunc("GET /api/v1/branding", s.branding)
+	mux.HandleFunc("GET /api/v1/branding/logo", s.brandingLogo)
+
 	route := func(p auth.Permission, pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.requireUser(p, h)) }
+	// module routes need their feature in the license (403 "feature not licensed" otherwise).
+	module := func(f string, p auth.Permission, pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, s.feature(f, s.requireUser(p, h)))
+	}
 	view, operate, configure := auth.PermView, auth.PermOperate, auth.PermConfigure
+
+	// Core: always available.
 	route(view, "GET /api/v1/me", s.me)
 	route(view, "GET /api/v1/info", s.info)
 	route(view, "POST /api/v1/auth/logout", s.logout)
@@ -87,9 +99,6 @@ func (s *Server) Handler() http.Handler {
 	route(configure, "DELETE /api/v1/robots/{id}", s.deleteRobot)
 	route(configure, "POST /api/v1/robots/{id}/token", s.rotateRobotToken)
 	route(operate, "POST /api/v1/robots/{id}/command", s.robotCommand)
-	route(operate, "POST /api/v1/robots/{id}/inspection", s.robotInspection)
-	route(operate, "POST /api/v1/robots/{id}/people", s.robotPeople)
-	route(view, "GET /api/v1/inspection/models", s.inspectionModels)
 	route(view, "GET /api/v1/routes", s.listRoutes)
 	route(view, "GET /api/v1/routes/{id}", s.getRoute)
 	route(configure, "PUT /api/v1/routes/{id}", s.updateRoute)
@@ -103,39 +112,54 @@ func (s *Server) Handler() http.Handler {
 	route(view, "GET /api/v1/patrols/{id}", s.getPatrol)
 	route(operate, "POST /api/v1/patrols/{id}/stop", s.stopPatrol)
 	route(view, "GET /api/v1/events", s.listEvents)
-	route(view, "GET /api/v1/anomalies", s.listAnomalies)
-	route(view, "GET /api/v1/anomalies/{id}", s.getAnomaly)
-	route(view, "GET /api/v1/anomalies/{id}/image", s.anomalyImage)
-	route(operate, "POST /api/v1/anomalies/{id}/validate", s.validateAnomaly)
-	route(view, "GET /api/v1/rules", s.listRules)
-	route(configure, "PUT /api/v1/rules/{category}", s.saveRule)
-	route(configure, "DELETE /api/v1/rules/{category}", s.deleteRule)
-	route(view, "GET /api/v1/crowd/heatmap", s.heatmap)
-	route(view, "GET /api/v1/crowd/timeline", s.timeline)
 	route(view, "GET /api/v1/floorplans", s.listFloorPlans)
 	route(configure, "POST /api/v1/floorplans", s.uploadFloorPlan)
 	route(configure, "PUT /api/v1/floorplans/{id}", s.calibrateFloorPlan)
 	route(configure, "DELETE /api/v1/floorplans/{id}", s.deleteFloorPlan)
 	route(view, "GET /api/v1/floorplans/{id}/file", s.floorPlanFile)
 	route(view, "GET /api/v1/reports/patrols/{id}/pdf", s.patrolReportPDF)
-	route(view, "GET /api/v1/reports/summary", s.summaryReport)
-	route(view, "GET /api/v1/reports/anomalies", s.anomaliesExport)
-	route(view, "GET /api/v1/reports/patrols", s.patrolsExport)
 	route(auth.PermUsers, "GET /api/v1/users", s.listUsers)
 	route(auth.PermUsers, "POST /api/v1/users", s.createUser)
 	route(auth.PermUsers, "PUT /api/v1/users/{id}", s.updateUser)
 	route(auth.PermUsers, "DELETE /api/v1/users/{id}", s.deleteUser)
 	route(auth.PermUsers, "POST /api/v1/users/{id}/password", s.resetPassword)
-	route(auth.PermAudit, "GET /api/v1/audit", s.listAudit)
-	route(auth.PermUsers, "GET /api/v1/api-clients", s.listClients)
-	route(auth.PermUsers, "POST /api/v1/api-clients", s.createClient)
-	route(auth.PermUsers, "PUT /api/v1/api-clients/{id}", s.updateClient)
-	route(auth.PermUsers, "POST /api/v1/api-clients/{id}/secret", s.rotateClientSecret)
-	route(auth.PermUsers, "DELETE /api/v1/api-clients/{id}", s.deleteClient)
+	route(auth.PermUsers, "GET /api/v1/license", s.getLicense)
+	route(auth.PermUsers, "PUT /api/v1/license", s.putLicense)
 
-	// Integration API for third-party applications (client credentials, read only).
+	// Anomaly: robot detections, validation, category rules, on-robot inspection.
+	module(license.Anomaly, view, "GET /api/v1/anomalies", s.listAnomalies)
+	module(license.Anomaly, view, "GET /api/v1/anomalies/{id}", s.getAnomaly)
+	module(license.Anomaly, view, "GET /api/v1/anomalies/{id}/image", s.anomalyImage)
+	module(license.Anomaly, operate, "POST /api/v1/anomalies/{id}/validate", s.validateAnomaly)
+	module(license.Anomaly, view, "GET /api/v1/rules", s.listRules)
+	module(license.Anomaly, configure, "PUT /api/v1/rules/{category}", s.saveRule)
+	module(license.Anomaly, configure, "DELETE /api/v1/rules/{category}", s.deleteRule)
+	module(license.Anomaly, view, "GET /api/v1/inspection/models", s.inspectionModels)
+	module(license.Anomaly, operate, "POST /api/v1/robots/{id}/inspection", s.robotInspection)
+
+	// Crowd: people detection, heatmap and timeline.
+	module(license.Crowd, view, "GET /api/v1/crowd/heatmap", s.heatmap)
+	module(license.Crowd, view, "GET /api/v1/crowd/timeline", s.timeline)
+	module(license.Crowd, operate, "POST /api/v1/robots/{id}/people", s.robotPeople)
+
+	// Exports and the period summary.
+	module(license.ReportsExport, view, "GET /api/v1/reports/summary", s.summaryReport)
+	module(license.ReportsExport, view, "GET /api/v1/reports/anomalies", s.anomaliesExport)
+	module(license.ReportsExport, view, "GET /api/v1/reports/patrols", s.patrolsExport)
+
+	// The audit log page; actions are recorded with or without it.
+	module(license.Audit, auth.PermAudit, "GET /api/v1/audit", s.listAudit)
+
+	// Integration API for third-party applications (client credentials, read only) and its clients.
+	module(license.Integration, auth.PermUsers, "GET /api/v1/api-clients", s.listClients)
+	module(license.Integration, auth.PermUsers, "POST /api/v1/api-clients", s.createClient)
+	module(license.Integration, auth.PermUsers, "PUT /api/v1/api-clients/{id}", s.updateClient)
+	module(license.Integration, auth.PermUsers, "POST /api/v1/api-clients/{id}/secret", s.rotateClientSecret)
+	module(license.Integration, auth.PermUsers, "DELETE /api/v1/api-clients/{id}", s.deleteClient)
 	if s.store != nil {
-		ext.New(s.cfg, s.store, s.hub.Online).Register(mux)
+		extMux := http.NewServeMux()
+		ext.New(s.cfg, s.store, s.hub.Online).Register(extMux)
+		mux.Handle("/api/ext/", s.feature(license.Integration, extMux))
 	}
 	mux.Handle("GET /metrics", metrics.Default)
 

@@ -29,6 +29,10 @@ type Config struct {
 	InspectionModels []string
 	// ExtTokenTTL is how long an integration API access token lives.
 	ExtTokenTTL time.Duration
+	// LicenseFile is the signed license (NETRA-LIC-1...) to read at start; License is the same text
+	// given directly. A license uploaded in the dashboard is the third source; the newest applies.
+	LicenseFile string
+	License     string
 }
 
 // Load reads the configuration, falling back to development defaults.
@@ -61,6 +65,8 @@ func Load() Config {
 		InspectionModels: list(env("NETRA_INSPECTION_MODELS",
 			"qwen3-vl:2b-instruct,moondream:latest,ahmadwaqar/smolvlm2-2.2b-instruct:latest")),
 		ExtTokenTTL: time.Duration(extMinutes) * time.Minute,
+		LicenseFile: env("NETRA_LICENSE_FILE", ""),
+		License:     env("NETRA_LICENSE", ""),
 	}
 }
 

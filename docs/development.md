@@ -94,13 +94,19 @@ simulated robot and an integration client. It prints `ok` or `FAIL` per check an
 1 at the first failure.
 
 ```bash
-# terminal 1: the API with a known admin password and pass-through detection
-NETRA_ADMIN_PASSWORD=admin NETRA_FINAL_DETECTOR_URL= make run
+# terminal 1: the API with a development license, a known admin password and pass-through detection
+NETRA_ADMIN_PASSWORD=admin NETRA_FINAL_DETECTOR_URL= make run-licensed
 
 # terminal 2
 pip install requests websocket-client
 NETRA_PASSWORD=admin make smoke
 ```
+
+`make run-licensed` makes a development signing key and a license of every module in `.dev/`
+(ignored by git) and builds the API trusting that key through `license.BuildKey`; only that build
+accepts it. `make dev-license EDITION=substation TIER=pro ADD=` issues another set of modules to
+see the dashboard as a client would. `make run` is the release behaviour without a license, checked
+by `make smoke-unlicensed` ([licensing](licensing.md)).
 
 - Leave `NETRA_FINAL_DETECTOR_URL` empty, as CI does: the test expects the robot's categories to
   become final. A real model judges the tiny test photo itself and may dismiss it.
@@ -124,7 +130,8 @@ What it checks, in order:
 5. `patrol_event` `finished`, patrol recap (anomalies per category, crowd peak), heatmap cells,
    crowd timeline, schedule saved, 401 without login.
 6. Reports: patrol PDF, summary PDF and XLSX, anomaly and patrol XLSX; track history.
-7. Robot control: e-stop reaches the robot, `/info`, inspection models, `set_inspection` acked (200),
+7. Robot control: e-stop reaches the robot, `/info` with every module licensed, public branding,
+   the license page, a forged license refused (400), inspection models, `set_inspection` acked (200),
    `set_people` refused (422), unknown model (400), robot load stored in the telemetry history.
 8. Clock skew: telemetry two hours behind, anomaly time moved onto server time, `clock_skew_s` about
    7200.
@@ -138,11 +145,13 @@ What it checks, in order:
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on pushes to `main`, on tags `v*` and
-on every pull request, with the permissions `contents: read` and `packages: write`.
+on pull requests into `main`, with the permissions `contents: read` and `packages: write`. Work on
+`dev` and its feature branches runs no CI; run the checks below locally before opening a pull
+request.
 
 | Job | Environment | Steps |
 |---|---|---|
-| `api` | `ubuntu-latest` with a `timescale/timescaledb:latest-pg16` service (user, password and database `netra`, port 5432, `pg_isready` health check) | Checkout; Go 1.22; golangci-lint v1.61 through `golangci/golangci-lint-action@v6`; `go test -race ./...`; smoke test: build `netra-api`, start it in the background with `NETRA_ADMIN_PASSWORD=admin`, the service database and `NETRA_DATA_DIR=/tmp/netra-data`, wait 3 s, install `requests` and `websocket-client`, run `scripts/smoke_test.py` |
+| `api` | `ubuntu-latest` with a `timescale/timescaledb:latest-pg16` service (user, password and database `netra`, port 5432, `pg_isready` health check) | Checkout; Go 1.22; golangci-lint v1.61 through `golangci/golangci-lint-action@v6`; `go test -race ./...`; smoke test: build `netra-api`, start it in the background with `NETRA_ADMIN_PASSWORD=admin`, the service database and `NETRA_DATA_DIR=/tmp/netra-data`, wait 3 s, install `requests` and `websocket-client`, run `scripts/smoke_test.py` with a throwaway key: `netra-license keygen`, a build trusting that key (`-ldflags -X .../license.BuildKey=...`), a license of every module in `NETRA_LICENSE_FILE`; then the release build on `:8081` without a license and `scripts/smoke_unlicensed.py` (core only, one robot) |
 | `ai` | `ubuntu-latest`, working directory `ai` | Python 3.12; `pip install -e ".[dev]"`; `ruff check .` and `ruff format --check .`; `python -m pytest -q` |
 | `images` | `ubuntu-latest`, push events only, after `api` and `ai` passed | Matrix `netra-api` (context `.`) and `netra-ai` (context `ai`): Buildx, login to `ghcr.io` with `GITHUB_TOKEN`, tags from `docker/metadata-action`, build and push for `linux/amd64` and `linux/arm64`, GitHub Actions cache per image |
 

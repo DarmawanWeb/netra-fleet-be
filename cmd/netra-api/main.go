@@ -18,6 +18,7 @@ import (
 	"github.com/DarmawanWeb/netra-fleet-be/internal/config"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/detect"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/hub"
+	"github.com/DarmawanWeb/netra-fleet-be/internal/license"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/notify"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/scheduler"
 	"github.com/DarmawanWeb/netra-fleet-be/internal/store"
@@ -45,7 +46,13 @@ func main() {
 	if cfg.FinalDetectorURL != "" {
 		det = detect.NewHTTP(cfg.FinalDetectorURL)
 	}
-	srv := api.New(cfg, st, hub.New(), notify.NewTelegram(cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPI), det, bus.New(cfg.NatsURL))
+	lic, err := loadLicense(ctx, cfg, st)
+	if err != nil {
+		slog.Error("license keys", "err", err)
+		os.Exit(1)
+	}
+	srv := api.New(cfg, st, hub.New(), notify.NewTelegram(cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramAPI), det,
+		bus.New(cfg.NatsURL), lic)
 	go srv.RunPipeline(ctx)
 	go scheduler.Run(ctx, st, cfg.TimeZone, srv.StartPatrol)
 
@@ -61,4 +68,45 @@ func main() {
 		slog.Error("http", "err", err)
 		os.Exit(1)
 	}
+}
+
+// loadLicense applies the newest valid license of the license file, NETRA_LICENSE and the one
+// uploaded in the dashboard. Without one, netra-api runs the core only.
+func loadLicense(ctx context.Context, cfg config.Config, st *store.Store) (*license.State, error) {
+	keys, err := license.TrustedKeys()
+	if err != nil {
+		return nil, err
+	}
+	lic := license.NewState(keys)
+	var cands []license.Candidate
+	if cfg.LicenseFile != "" {
+		raw, err := os.ReadFile(cfg.LicenseFile)
+		if err != nil {
+			slog.Warn("license file", "path", cfg.LicenseFile, "err", err)
+		}
+		cands = append(cands, license.Candidate{Text: string(raw), Source: "file"})
+	}
+	cands = append(cands, license.Candidate{Text: cfg.License, Source: "env"})
+	uploaded, err := st.UploadedLicense(ctx)
+	if err != nil {
+		slog.Warn("uploaded license", "err", err)
+	}
+	cands = append(cands, license.Candidate{Text: uploaded, Source: "upload"})
+	lic.Load(cands...)
+
+	info := lic.Info()
+	switch {
+	case len(keys) == 0:
+		slog.Warn("license: no trusted key built in, running the core only")
+	case info.ID == "":
+		slog.Warn("license: none valid, running the core only", "status", info.Status, "err", info.Error)
+	default:
+		slog.Info("license", "id", info.ID, "client", info.Client, "edition", info.Edition, "tier", info.Tier,
+			"status", info.Status, "features", info.Features, "max_robots", info.MaxRobots,
+			"expires", info.ExpiresAt, "source", info.Source)
+		if info.ExpiresAt != nil && time.Until(*info.ExpiresAt) < 30*24*time.Hour {
+			slog.Warn("license expires soon", "expires", info.ExpiresAt, "grace_ends", info.GraceEnds)
+		}
+	}
+	return lic, nil
 }
