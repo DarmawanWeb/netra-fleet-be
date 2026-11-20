@@ -19,6 +19,8 @@ func TestRobotCommandNames(t *testing.T) {
 		{"estop", http.StatusConflict}, // accepted, but the robot is not connected
 		{"estop_release", http.StatusConflict},
 		{"pause", http.StatusConflict},
+		{"recorder_start", http.StatusConflict},
+		{"recorder_stop", http.StatusConflict},
 		{"start_patrol", http.StatusBadRequest}, // only through POST /patrols
 		{"self_destruct", http.StatusBadRequest},
 	}
