@@ -443,7 +443,7 @@ and keeps the ID in a pending map until the robot answers
 |---|---|---|---|
 | `start_patrol` | `route_id`, `patrol_id` | `POST /api/v1/patrols`, scheduler | `ok: false` sets the patrol `failed` with `msg` |
 | `stop_patrol` | none | `POST /api/v1/patrols/{id}/stop` | `ok: true` sets the patrol `stopped` (`stopped by operator`) |
-| `pause`, `resume`, `localize`, `stop_patrol`, `estop`, `estop_release` | operator's `args`, passed through | `POST /api/v1/robots/{id}/command` | Nothing on the server; dashboards see the `ack` on the live feed |
+| `pause`, `resume`, `localize`, `stop_patrol`, `estop`, `estop_release`, `recorder_start`, `recorder_stop` | operator's `args`, passed through | `POST /api/v1/robots/{id}/command` | Nothing on the server; dashboards see the `ack` on the live feed |
 | `set_inspection` | `enabled`, `model`, `interval` (those given) | `POST /api/v1/robots/{id}/inspection` | Becomes the HTTP answer |
 | `set_people` | `enabled` | `POST /api/v1/robots/{id}/people` | Becomes the HTTP answer |
 

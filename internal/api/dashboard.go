@@ -130,9 +130,11 @@ func (s *Server) rotateRobotToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // robotCommands are the commands an operator may send directly; start_patrol goes through
-// POST /patrols. estop latches the robot's software e-stop until estop_release.
+// POST /patrols. estop latches the robot's software e-stop until estop_release; recorder_start
+// and recorder_stop switch the robot's on-board recording (cameras, sensors) on and off.
 var robotCommands = map[string]bool{
 	"pause": true, "resume": true, "localize": true, "stop_patrol": true, "estop": true, "estop_release": true,
+	"recorder_start": true, "recorder_stop": true,
 }
 
 func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +143,7 @@ func (s *Server) robotCommand(w http.ResponseWriter, r *http.Request) {
 		Args map[string]any `json:"args"`
 	}
 	if decode(r, &body) != nil || !robotCommands[body.Name] {
-		writeError(w, http.StatusBadRequest, "name must be pause, resume, localize, stop_patrol, estop or estop_release")
+		writeError(w, http.StatusBadRequest, "name must be pause, resume, localize, stop_patrol, estop, estop_release, recorder_start or recorder_stop")
 		return
 	}
 	id, err := s.sendCommand(r.Context(), r.PathValue("id"), body.Name, body.Args, 0)
