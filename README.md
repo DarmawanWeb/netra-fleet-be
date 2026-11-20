@@ -102,7 +102,7 @@ Dashboard side, with a Bearer session token (the full reference is [docs/api.md]
 | GET | `/api/v1/info` (`public_url` robots connect to, `time_zone`) | view |
 | GET | `/api/v1/robots`, `/api/v1/robots/{id}/track` | view |
 | POST, PUT, DELETE | `/api/v1/robots[/{id}]`, `/api/v1/robots/{id}/token` | configure |
-| POST | `/api/v1/robots/{id}/command` (`pause`, `resume`, `localize`, `stop_patrol`, `estop`, `estop_release`) | operate |
+| POST | `/api/v1/robots/{id}/command` (`pause`, `resume`, `localize`, `stop_patrol`, `estop`, `estop_release`, `recorder_start`, `recorder_stop`) | operate |
 | POST | `/api/v1/robots/{id}/inspection` `{enabled?, model?, interval?}`, `/api/v1/robots/{id}/people` `{enabled}` (wait up to 10 s for the robot's ack) | operate |
 | GET | `/api/v1/inspection/models` (`NETRA_INSPECTION_MODELS`, comma-separated) | view |
 | GET, POST, PUT, DELETE | `/api/v1/api-clients[/{id}]`, `POST /api/v1/api-clients/{id}/secret` (integration clients) | users |
